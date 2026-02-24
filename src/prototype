@@ -1,0 +1,316 @@
+/*
+#include <iostream>
+#include <cstdlib>
+#include <unistd.h>
+#include <vector>
+#include <termios.h>
+#include <ctime>
+#include <algorithm>
+#include <fcntl.h>
+#include <csignal>
+
+using namespace std;
+
+const int width = 15, height = 20;
+
+bool running = true;
+bool paused = false;
+
+// Couleurs pour les tétriminos
+const char* colors[] = {
+    "\033[31m", // Rouge
+    "\033[32m", // Vert
+    "\033[33m", // Jaune
+    "\033[34m", // Bleu
+    "\033[35m", // Magenta
+    "\033[36m", // Cyan
+    "\033[37m"  // Blanc
+};
+
+vector<const char*> previousColors; // Contient les precedentes couleurs des tetrimino
+
+int points = 0;
+
+// Formes des tétriminos
+const vector<vector<vector<int>>> shapes = {
+    {{0, 1, 1}, {1, 1, 0}},   // Z
+    {{1, 0, 0}, {1, 1, 1}},   // L
+    {{1, 1}, {1, 1}},         // O
+    {{1, 1, 0}, {0, 1, 1}},   // S
+    {{1, 1, 1, 1}},           // I
+    {{0, 0, 1}, {1, 1, 1}},   // J
+    {{0, 1, 0}, {1, 1, 1}},   // T
+};
+
+// Represente la grille de jeu
+vector<vector<int>> grid(height, vector<int>(width, 0));
+
+// stocke la couleur de chaque cellule de la grille
+vector<vector<const char*>> colorGrid(height, vector<const char*>(width, nullptr));
+
+// Structure pour représenter un tétrimino
+struct Tetrimino {
+    int x, y;  // position de départ
+    vector<vector<int>> shape;
+    const char* color;
+
+    Tetrimino(int x, int y, vector<vector<int>> shape, const char* color)
+        : x(x), y(y), shape(shape), color(color) {
+    }
+};
+
+// Fonction pour détecter si une touche a été pressée
+bool ifPressed() {
+    struct termios oldt, newt;//structure pour stocker les paramètres du terminal
+    int ch;                   //variable pour stocker le caractère saisi
+    int oldf;                 //variable pour stocker les indicateurs originaux du descripteur de fichier
+
+    //Récupère les paramètres actuels du terminal et les enregistre dans oldt
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+
+    //modifie les paramètres pour désactiver certains indicateurs(mode canonique et echo)
+    newt.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);//applique les paramètres modifiés
+
+    oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);//modifie STDIN (descripteur de fichier) pour activer le mode non-bloquant
+    //Cela garanti que getchar() ne bloque pas le programme si aucune touche n'est pressée
+
+    ch = getchar();
+
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    fcntl(STDIN_FILENO, F_SETFL, oldf);//Restaure les indicateurs originaux du descripteur du fichier
+
+    //Si une touche est detectée, retourn vrai , sinon retourn faux.
+    if (ch != EOF) {
+        ungetc(ch, stdin);
+        return true;
+    }
+    return false;
+}
+
+// Afficher la grille de jeu avec le tétrimino actuel
+void show_game(const Tetrimino& current) {
+    vector<vector<int>> displayGrid = grid;
+    vector<vector<const char*>> displayColorGrid = colorGrid;
+
+    int rows = current.shape.size();
+    int cols = current.shape[0].size();
+
+    for (int i = 0; i < rows; ++i) {
+        for (int j = 0; j < cols; ++j) {
+            if (current.shape[i][j] == 1) {
+                int x = current.x + i;
+                int y = current.y + j;
+                if (x >= 0 && x < height && y >= 0 && y < width) {
+                    displayGrid[x][y] = -1;  // Marque une cellule d'un tétrimino
+                    displayColorGrid[x][y] = current.color;   // avec sa couleur
+                }
+            }
+        }
+    }
+
+    // Affichage des points
+    cout << "\033[1;" << 23 << "H"  // Position du curseur
+        << "\033[33mPoints: " << points << "\033[0m\n";
+
+    // Affichage avec contour
+    cout << "┌";
+    for (int i = 0; i < 2 * width; ++i) cout << "─";
+    cout << "┐\n";
+
+    for (int i = 0; i < height; ++i) {
+        cout << "│";
+        for (int j = 0; j < width; ++j) {
+            if (displayGrid[i][j] == 0) {
+                cout << "  ";  // Cellule vide
+            }
+            else {
+                cout << displayColorGrid[i][j] << "██" << "\033[0m";  // cellule placé avec couleur
+            }
+        }
+        cout << "│\n";
+    }
+
+    cout << "└";
+    for (int i = 0; i < 2 * width; ++i) cout << "─";
+    cout << "┘\n";
+}
+
+// Vérifie si le tétrimino peut être placé
+bool canPlaceTetrimino(const Tetrimino& tetrimino) {
+    int rows = tetrimino.shape.size();
+    int cols = tetrimino.shape[0].size();
+
+    for (int i = 0; i < rows; ++i) {
+        for (int j = 0; j < cols; ++j) {
+            if (tetrimino.shape[i][j] == 1) {
+                int x = tetrimino.x + i;
+                int y = tetrimino.y + j;
+
+                if (x < 0 || x >= height || y < 0 || y >= width || grid[x][y] != 0) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+// Fonction pour gérer la rotation d'un tetrimino
+void rotateTetrimino(Tetrimino& tetrimino, bool clockwise = true) {
+    vector<vector<int>> rotated;
+
+    int rows = tetrimino.shape.size();
+    int cols = tetrimino.shape[0].size();
+
+    if (clockwise) {   // tourner le tetrimino en sens horlogique
+        rotated.resize(cols, vector<int>(rows));
+        for (int i = 0; i < rows; ++i) {
+            for (int j = 0; j < cols; ++j) {
+                rotated[j][rows - 1 - i] = tetrimino.shape[i][j];
+            }
+        }
+    }
+    else {       // tourner le tetrimino en sens anti horlogique
+        rotated.resize(cols, vector<int>(rows));
+        for (int i = 0; i < rows; ++i) {
+            for (int j = 0; j < cols; ++j) {
+                rotated[cols - 1 - j][i] = tetrimino.shape[i][j];
+            }
+        }
+    }
+
+    // Pour appliquer la rotation ssi elle est valide
+    Tetrimino temp = tetrimino;
+    temp.shape = rotated;
+    if (canPlaceTetrimino(temp)) {
+        tetrimino.shape = rotated;
+    }
+}
+
+// Déplace le tétrimino
+bool moveTetrimino(Tetrimino& tetrimino, int dx, int dy) {
+    tetrimino.x += dx;
+    tetrimino.y += dy;
+    if (!canPlaceTetrimino(tetrimino)) {
+        tetrimino.x -= dx;
+        tetrimino.y -= dy;
+        return false;
+    }
+    return true;
+}
+
+// Fixe le tétrimino sur la grille
+void placeTetrimino(const Tetrimino& tetrimino) {
+    int rows = tetrimino.shape.size();
+    int cols = tetrimino.shape[0].size();
+
+    for (int i = 0; i < rows; ++i) {
+        for (int j = 0; j < cols; ++j) {
+            if (tetrimino.shape[i][j] == 1) {
+                grid[tetrimino.x + i][tetrimino.y + j] = 1;
+                colorGrid[tetrimino.x + i][tetrimino.y + j] = tetrimino.color;
+            }
+        }
+    }
+}
+
+
+// Efface les lignes complètes
+void clearFullRows() {
+    for (int i = height - 1; i >= 0; --i) {
+        // Verifie si la ligne est complete
+        if (all_of(grid[i].begin(), grid[i].end(), [](int cell) { return cell != 0; })) {
+            // Supprime la ligne qui est complete
+            grid.erase(grid.begin() + i);
+            colorGrid.erase(colorGrid.begin() + i);
+
+            // Insere une nouvelle ligne vide en haut
+            vector<int> newLine(width, 0);
+            vector<const char*> newColorLine(width, nullptr);
+            grid.insert(grid.begin(), newLine);
+            colorGrid.insert(colorGrid.begin(), newColorLine);
+
+            // Passe a la ligne suivante
+            ++i;
+            points += 100;
+        }
+    }
+}
+
+
+// Génère un tétrimino aléatoire
+Tetrimino generateRandomTetrimino() {
+    int shapeIndex = rand() % shapes.size();
+
+    // Si toutes les couleurs ont éte utlisées, on réinitialise
+    if (previousColors.size() == 7) { previousColors.clear(); }
+
+    // Pour choisir une couleur differente des precedentes
+    const char* color;
+    do {
+        color = colors[rand() % 7];
+    } while (find(previousColors.begin(), previousColors.end(), color) != previousColors.end());
+
+    previousColors.push_back(color);
+
+    return Tetrimino(0, width / 2 - shapes[shapeIndex][0].size() / 2, shapes[shapeIndex], color);
+}
+
+// Permet de gerer un signal
+void handler(int signal) {
+    if (signal == SIGINT) {
+        cout << "\nVous avez quitté le jeu. À bientot!" << endl;
+        running = false;
+
+    }
+    else if (signal == SIGTSTP) {
+        paused = !paused;  // Inverser l'état de la pause
+    }
+}
+
+
+int main() {
+    srand(time(0));
+    Tetrimino current = generateRandomTetrimino();
+    signal(SIGINT, handler);    // Quitter le jeu avec Ctrl + C
+    signal(SIGTSTP, handler);   // Mettre pause avec Ctrl + Z
+
+    while (running) {
+        if (paused) {
+            continue;
+        }
+
+        system("clear");  // Pour effacer l'écran
+        show_game(current);
+
+        if (ifPressed()) {
+            char key = getchar();
+            if (key == 'q') { moveTetrimino(current, 0, -1); }    // Gauche
+            if (key == 'd') { moveTetrimino(current, 0, 1); }     // Droite
+            if (key == 's') { moveTetrimino(current, 1, 0); }     // Descendre
+            if (key == 'z') { rotateTetrimino(current); }         // Rotation horlogique
+            if (key == 'e') { rotateTetrimino(current, false); }  // Rotation anti horlogique
+        }
+
+        // Si le tétrimino ne peut plus descendre
+        if (!moveTetrimino(current, 1, 0)) {
+            placeTetrimino(current);        // Fixe le tétrimino sur la grille
+            clearFullRows();                // Supprime les lignes complètes (s'il y en a)
+            current = generateRandomTetrimino(); // Génère un nouveau tétrimino
+
+            // Si le nouveau tétrimino ne peut pas être placé
+            if (!canPlaceTetrimino(current)) {
+                cout << "\nGame Over!\n";
+                break;
+            }
+        }
+
+
+        usleep(1000000);  // Pause de 200ms
+    }
+    return 0;
+}
+*/
