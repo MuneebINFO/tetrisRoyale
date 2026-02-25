@@ -6,8 +6,10 @@
 #include <memory>
 #include <string>
 
-#include "Controller.h"
+#include "ChatModel.h"
+#include "SocialView.h"
 #include "ViewCLI.h"
+#include "Controller.h"
 
 /*
  * ControllerCLI
@@ -17,6 +19,9 @@ struct Terminal {
     termios oldt;
     int oldf;
 };
+
+class SocialView;
+class ChatModel;
 
 class ControllerCLI final : public IController {
    private:
@@ -28,15 +33,16 @@ class ControllerCLI final : public IController {
     std::atomic<bool> threadActive;
     std::unique_ptr<ThreadData> data_;
     std::shared_ptr<ViewCLI> view_;
+    std::shared_ptr<ChatModel> chatModel_;
+    std::shared_ptr<SocialView> socialView_;
 
     static void* GameInputUser(void* c);
+    static void* gameInputSpectator(void* c);
     bool validateInput(std::string input);
     void setRawMode(bool enable);
     void captureInputMainMenu(Tetris& tetris);
-    void captureInputInvitationMenu(Tetris& tetris);
     void captureInputGameInvitationMenu(Tetris& tetris);
     void captureInputRankingMenu(Tetris& tetris);
-    void captureInputProfileMenu(Tetris& tetris);
     void captureInputPlayMenu(Tetris& tetris);
     void captureInputCreatingMenu(Tetris& tetris);
     void captureInputChatRoom(Tetris& tetris);
@@ -48,14 +54,14 @@ class ControllerCLI final : public IController {
     ~ControllerCLI();
     ControllerCLI(const ControllerCLI& other) = delete;
     ControllerCLI& operator=(const ControllerCLI& other) = delete;
-    std::pair<std::string, std::string> getUserLoginInfo();
-    void captureInput(Game* game);
-    void captureInput(MENU_STATE menu, Tetris& tetris);
-    void captureInputMenuLobby(Tetris& tetris);
-    void waitingRoomInput(bool isLeader, bool& running);
-    void waitingRoomAsLeader(bool&);
-    void captureInputChoiceMenu(int key, int& idx1, int& idx2);
-    void stop();
-    void handleFriendRequestStatus(const HeaderResponse& responseHeader,
-                                   const FriendHeader& playerNameStr);
+
+    std::pair<std::string, std::string> getUserLoginInfo() override;
+    void captureInput(Game* game) override;
+    void captureInput(MENU_STATE menu, Tetris& tetris) override;
+    void captureInputMenuLobby(Tetris& tetris) override;
+    void waitingRoomInput(bool isLeader, bool& running) override;
+    void waitingRoomAsLeader(bool&) override;
+    void stop() override;
+    void handleFriendRequestStatus(const PlayerHeader& invitedPlayer,
+                                   std::shared_ptr<IView> view_) override;
 };

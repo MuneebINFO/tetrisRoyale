@@ -1,9 +1,38 @@
 # Tetris Royale
+## Description du projet
 
-## Build le projet
-### Installer les dépendances
-Pour faire fonctionner le projet, vous aurez besoin de ces dépendances.
-Make · `sudo apt install Make`\
+Tetris Royale est un jeu Tetris multijoueur en architecture client-serveur, développé en C++ dans le cadre du projet annuel de BA2 en informatique à l’ULB. Cette version constitue toutefois une amélioration personnelle du projet initial.
+
+Le projet implémente une version réseau du célèbre jeu Tetris, permettant à plusieurs joueurs de :
+
+- Se connecter à un serveur central
+
+- Discuter via un chat intégré
+
+- Gérer un système d’amis et d’invitations
+
+- Rejoindre un lobby
+
+- Lancer des parties en mode compétitif
+
+- Jouer avec une logique de jeu gérée côté serveur
+
+Ce projet représente une première implémentation complète d’un système distribué combinant :
+
+- Programmation réseau (sockets)
+
+- Architecture client-serveur
+
+- Gestion d’état côté serveur
+
+- Interface terminal (ncurses)
+
+- Interface en GUI
+
+---
+
+## Installer les dépendances
+Pour faire fonctionner le projet, vous aurez besoin de ces dépendances. \
 [PostgreSQL](https://www.postgresql.org/download/linux/ubuntu/) · `apt install postgresql` \
 [libpqxx](https://pqxx.org/libpqxx/#finding-everything) · `sudo apt install libpqxx-dev`\
 [Ncurses](https://tldp.org/HOWTO/NCURSES-Programming-HOWTO/intro.html) · `sudo apt install ncurses-dev`
@@ -31,6 +60,7 @@ Une fois le serveur lancé, vous pouvez lancer le client. \
 ```
 
 ## Installation de la BDD locale
+Vous devez aussi mettre en place votre propre base de données.
 ### Étape 1 : Installer PostgreSQL (si ce n'est pas fait)
 ```
 sudo apt update

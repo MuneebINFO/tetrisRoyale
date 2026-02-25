@@ -1,8 +1,7 @@
 #ifndef SSERVER_H
 #define SSERVER_H
 
-#include <sqlite3.h>     // For database integration
-#include <sys/select.h>  //multiplexage des sockets avec select()
+#include <sys/select.h>  // multiplexage des sockets avec select()
 
 #include <cstdint>
 #include <map>
@@ -26,20 +25,21 @@ struct UserAccount;
 class Server {
     int serverSocket;
     fd_set allActiveSockets, readySockets;
-    std::map<int, std::shared_ptr<Player>> clients;
+    std::map<int, std::shared_ptr<Player>> clients; // socket = joueur
+    // liste des salles (ID, room)
     std::vector<std::pair<int, std::shared_ptr<GameRoom>>> gameRooms_;
-    std::set<int> activePlayers;
+    std::set<int> activePlayers; // sockets des joueurs en attente
     int maxSocket;
     pqxx::connection* db;
-    std::map<std::string, UserAccount> userDatabase;
+    // données des comptes utilisateurs
+    std::map<std::string, UserAccount> userDatabase;  
 
-    static Server* instance;  // singleton
+    static Server* instance;
 
-    // constructeur privé pour singleton
     Server();
     ~Server();
 
-    // gere l'arrivée d'une nouvelle connexion client
+    // gère l'arrivée d'une nouvelle connexion client
     void handleNewConnection();
 
     // traite les messages envoyés par les clients
@@ -47,16 +47,15 @@ class Server {
 
     // analyse et exécute les commandes envoyées par un client
     void processMessage(int clientSocket, const std::string& message);
-    // on peut aussi faire une alternative ou le message sera en forme de
-    // tableau d'entiers mais à voir
 
    public:
     // Initialize the PostgreSQL database
     void initializeDatabase();
 
-    // démarre la boucle principale du serveur, gere les connexions et messages
+    // démarre la boucle principale du serveur, gère les connexions et messages
     // clients
     void run();
+
     // getters
     std::string getUserAccount(int playerID);
     std::map<int, std::shared_ptr<Player>>& getClients() { return clients; }
@@ -65,12 +64,15 @@ class Server {
     std::map<std::string, UserAccount>& getUserDatabase() {
         return userDatabase;
     }
+    std::vector<std::pair<int, std::shared_ptr<GameRoom>>>& getGameRooms() {
+        return gameRooms_;
+    }
 
-    // déconnecte proprement un client et libere les ressources
+    // déconnecte proprement un client et libère les ressources
     void disconnectClient(int clientSocket);
 
     int generatePlayerID();
-
+    
     static Server& getInstance() {
         if (!instance) {
             instance = new Server();
@@ -78,7 +80,6 @@ class Server {
         return *instance;
     }
 
-    // pr etre sur que le message est correctement envoyé
     bool sendMessage(int clientSocket, const void* data, size_t dataSize);
     void removeActivePlayer(int socketPlayer);
     int findRoomIndex(
@@ -92,12 +93,9 @@ class Server {
     std::shared_ptr<Player> getPlayer(int socket);
     std::shared_ptr<GameRoom> getLobbyForClient(int socket);
     bool checkWinner(uint32_t score);
+    // nettoie le lobby d'un joueur lorsqu'il quitte
     void cleanupLobby(int clientSocket);
-    std::vector<std::pair<int, std::shared_ptr<GameRoom>>>& getGameRooms() {
-        return gameRooms_;
-    }
     int receiveMessage(char* buffer);
-    // void updateRanking(const std::string& username, int score);
 };
 
 #endif

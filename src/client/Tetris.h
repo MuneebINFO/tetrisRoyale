@@ -6,12 +6,15 @@
 #include "../common/CONSTANT.h"
 #include "Signal.h"
 
-
 class Server;
 class Player;
 class IView;
 class IController;
 class Lobby;
+class SocialController;
+class SocialView;
+class ChatController;
+class ChatView;
 
 class Tetris {
    private:
@@ -21,16 +24,21 @@ class Tetris {
     std::shared_ptr<IView> view_;
     std::shared_ptr<IController> controller_;
     std::shared_ptr<Lobby> lobby_;
+    std::shared_ptr<SocialController> socialController_;
+    std::shared_ptr<SocialView> socialView_;
+    std::shared_ptr<ChatController> chatController_;
+    std::shared_ptr<ChatView> chatView_;
     MENU_STATE menuState_;
 
    public:
-    Tetris(bool gui = false);
+    Tetris();
     ~Tetris();
-    void run();
+    bool run();
+
+    void init();
 
     // Getters et setters pour menuState_ et GUI_
     void setMenuState(MENU_STATE menu) { menuState_ = menu; }
-    void addFriend(std::string friendName);
     MENU_STATE getMenuState() const { return menuState_; }
     std::shared_ptr<Lobby> getLobby() { return lobby_; }
     std::shared_ptr<Player> getPlayer() { return player_; }

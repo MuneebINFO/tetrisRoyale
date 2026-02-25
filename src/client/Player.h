@@ -1,5 +1,6 @@
 #ifndef PLAYER_H_
 #define PLAYER_H_
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -22,13 +23,14 @@ class Player : public std::enable_shared_from_this<Player> {
     bool noFriends_;
     bool requestAccepted_;
     std::string lastMessageSent_;
-    FriendHeader friendSelected_;
-    std::vector<FriendHeader> vectorFriends_;
-    std::vector<FriendHeader> vectorInvitations_;
+    PlayerHeader friendSelected_;
+    PlayerHeader player_;
+    std::vector<PlayerHeader> vectorFriends_;
+    std::vector<PlayerHeader> vectorInvitations_;
 
-    std::shared_ptr<Server> server_;
-    std::shared_ptr<IView> view_;
-    std::shared_ptr<IController> controller_;
+    std::weak_ptr<Server> server_;
+    std::weak_ptr<IView> view_;
+    std::weak_ptr<IController> controller_;
     std::pair<std::string, std::string> getUserLoginInfo(ACCOUNT_STATE menu);
 
     [[nodiscard]] __attribute__((const)) static ACCOUNT_TYPE
@@ -46,32 +48,40 @@ class Player : public std::enable_shared_from_this<Player> {
     std::pair<std::string, std::string> getUserInfo(ACCOUNT_STATE);
 
     // Getter and setter
+
+    std::shared_ptr<IController> getController();
+    std::shared_ptr<IView> getView();
     std::string getName() { return pseudo_; }
     int getPlayerId() { return playerId_; }
-    std::vector<FriendHeader> getVectorFriends() const {
+    std::vector<PlayerHeader> getVectorFriends() const {
         return vectorFriends_;
     }
-    std::vector<FriendHeader> getVectorInvitations() const {
+    std::vector<PlayerHeader> getVectorInvitations() const {
         return vectorInvitations_;
     }
     std::vector<LobbyInvitation> getLobbyInvitations();
     bool hasNoFriends() { return noFriends_; }
     void setNoFriends(bool noFriends) { noFriends_ = noFriends; }
-    void setVectorFriends(std::vector<FriendHeader> vectorFriends) {
+    void setVectorFriends(std::vector<PlayerHeader> vectorFriends) {
         vectorFriends_ = vectorFriends;
     }
-    void setVectorInvitations(std::vector<FriendHeader> vectorInvitations) {
+    void setVectorInvitations(std::vector<PlayerHeader> vectorInvitations) {
         vectorInvitations_ = vectorInvitations;
     }
-    std::shared_ptr<Server> getServer() { return server_; }
+    std::shared_ptr<Server> getServer();
     bool isConnected() { return playerId_ != -1; }
     void setName(std::string pseudo) { pseudo_ = pseudo; }
     void setPlayerId(int playerId) {
         if (playerId_ == -1) playerId_ = playerId;
     }
-    FriendHeader getFriendSelected() { return friendSelected_; }
-    void setFriendSelected(FriendHeader friendSelected) {
+    PlayerHeader getFriendSelected() { return friendSelected_; }
+    void setFriendSelected(PlayerHeader friendSelected) {
         this->friendSelected_ = friendSelected;
+    }
+    PlayerHeader getPlayer() {
+        player_.idPlayer = playerId_;
+        strcpy(player_.username, pseudo_.c_str());
+        return player_;
     }
     std::string getLastMessageSent() { return lastMessageSent_; }
     void setLastMessageSent(std::string lastMessageSent) {
@@ -79,5 +89,8 @@ class Player : public std::enable_shared_from_this<Player> {
     }
     void setLine(int line) { line_ = line; }
     int getLine() { return line_; }
+
+    void setHightScore(int score);
+    int getHightScore() { return player_.highScore; }
 };
 #endif

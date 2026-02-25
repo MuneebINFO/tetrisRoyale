@@ -5,11 +5,10 @@
 
 #include <cstdint>
 #include <cstring>
-#include <fstream>
 #include <iostream>
-#include <nlohmann/json.hpp>
-#include "gameServer.h"
+#include <memory>
 
+#include "gameServer.h"
 
 // Factory method to create the appropriate message handler based on the header
 std::shared_ptr<IMessage> IMessage::buildMessage(const Header& header) {
@@ -27,10 +26,8 @@ std::shared_ptr<IMessage> IMessage::buildMessage(const Header& header) {
                                                        // handler
         case MESSAGE_TYPE::SOCIAL:
             return std::make_shared<SocialMessage>();
-        case MESSAGE_TYPE::FRIEND:
-        case MESSAGE_TYPE::ACCEPTFRIEND:
-        case MESSAGE_TYPE::FRIENDLIST:
-        case MESSAGE_TYPE::REQUESTFRIENDLIST:
+        case MESSAGE_TYPE::LEADERBOARD:
+            return nullptr;
         default:
             std::cerr << "[SERVER] ERREUR: Type de message inconnu"
                       << std::endl;
@@ -62,14 +59,14 @@ void AccountMessage::handleMessage(const std::string& message,
 }
 
 void AccountMessage::handleLogin(const std::string& username,
-    const std::string& password,
-    int clientSocket) {
+                                 const std::string& password,
+                                 int clientSocket) {
     Server& server = Server::getInstance();
     auto& clients = server.getClients();
 
     char buffer[BUFFER_SIZE];
     HeaderResponse header = {MESSAGE_TYPE::ACCOUNT,
-    sizeof(AccountResponseHeader)};
+                             sizeof(AccountResponseHeader)};
     AccountResponseHeader responseHeader;
     memcpy(buffer, &header, sizeof(HeaderResponse));
     size_t size = sizeof(HeaderResponse) + sizeof(AccountResponseHeader);
@@ -79,7 +76,7 @@ void AccountMessage::handleLogin(const std::string& username,
 
     // requête SQL pour récupérer le mot de passe et l'ID du joueur
     pqxx::result res = transaction.exec_params(
-    "SELECT password, player_id FROM users WHERE username = $1", username);
+        "SELECT password, player_id FROM users WHERE username = $1", username);
 
     // vérifie si l'utilisateur existe dans la bdd
     if (res.empty() || res[0][0].is_null() || res[0][1].is_null()) {
@@ -89,7 +86,7 @@ void AccountMessage::handleLogin(const std::string& username,
         strcpy(responseHeader.message, "Username or password is incorrect");
 
         memcpy(buffer + sizeof(HeaderResponse), &responseHeader,
-        sizeof(AccountResponseHeader));
+               sizeof(AccountResponseHeader));
         server.sendMessage(clientSocket, buffer, size);
         return;
     }
@@ -100,31 +97,29 @@ void AccountMessage::handleLogin(const std::string& username,
 
     // vérifie si le mdp saisi correspond à celui stocké
     if (passwordInDB == password) {
-    std::cout << "Login successful for user: " << username << std::endl;
-    responseHeader.responseType = ACCOUNT_RESPONSE::VALID;
-    responseHeader.idPlayer = playerID;
-    strcpy(responseHeader.message, "LOGIN_SUCCESS");
-    
-    // assigner l'ID du joueur à la connexion
-    auto player = std::make_shared<Player>();
-    player->ID = playerID;
-    player->username = username;
-    player->socket = clientSocket;
-    player->gameRoom = nullptr;
-    clients[clientSocket] = player;
+        std::cout << "Login successful for user: " << username << std::endl;
+        responseHeader.responseType = ACCOUNT_RESPONSE::VALID;
+        responseHeader.idPlayer = playerID;
+        strcpy(responseHeader.message, "LOGIN_SUCCESS");
 
+        // assigner l'ID du joueur à la connexion
+        auto player = std::make_shared<Player>();
+        player->ID = playerID;
+        player->username = username;
+        player->socket = clientSocket;
+        player->gameRoom = nullptr;
+        clients[clientSocket] = player;
     } else {
-    std::cout << "Incorrect password for user: " << username << std::endl;
-    responseHeader.responseType = ACCOUNT_RESPONSE::ERROR;
-    responseHeader.idPlayer = -1;
-    strcpy(responseHeader.message, "Username or password is incorrect");
+        std::cout << "Incorrect password for user: " << username << std::endl;
+        responseHeader.responseType = ACCOUNT_RESPONSE::ERROR;
+        responseHeader.idPlayer = -1;
+        strcpy(responseHeader.message, "Username or password is incorrect");
     }
 
     memcpy(buffer + sizeof(HeaderResponse), &responseHeader,
-    sizeof(AccountResponseHeader));
+           sizeof(AccountResponseHeader));
     server.sendMessage(clientSocket, buffer, size);
 }
-
 
 void AccountMessage::handleRegister(const std::string& username,
                                     const std::string& password,
@@ -160,6 +155,11 @@ void AccountMessage::handleRegister(const std::string& username,
             "INSERT INTO users (username, password, player_id) VALUES ($1, $2, "
             "$3)",
             username, password, playerID);
+
+        // insere le nouveau utilisateur dans la table score
+        transaction.exec_params(
+            "INSERT INTO score (username, id) VALUES ($1, $2)", username,
+            playerID);
 
         transaction.commit();
 
@@ -197,8 +197,8 @@ void GameMessage::handleMessage(const std::string& message, int clientSocket) {
     const char* msg = message.data() + sizeof(GameTypeHeader);
 
     switch (gameHeader.type) {
-        case GAME_TYPE::SPAWN_TETRAMINO:
-            handleSpawnTetraminoMsg(msg, clientSocket);
+        case GAME_TYPE::TETRAMINO_REQUEST:
+            handleTetraminoMsg(clientSocket);
             break;
         case GAME_TYPE::ROTATE:
             handleRotateMsg(msg, clientSocket);
@@ -215,11 +215,19 @@ void GameMessage::handleMessage(const std::string& message, int clientSocket) {
         case GAME_TYPE::END:
             handleEndMsg(clientSocket);
             break;
-        case GAME_TYPE::MALUS_CONFIRM:
-            handleConfirmMalusMsg(msg, clientSocket);
+        case GAME_TYPE::MALUS_AUTHORISATION:
+            handleMalusAuthorisationMsg(clientSocket);
+            break;
+        case GAME_TYPE::BONUS_AUTHORISATION:
+            handleBonusAuthorisationMsg(clientSocket);
             break;
         case GAME_TYPE::BONUS:
+            handleBonusMsg(msg, clientSocket);
+            break;
         case GAME_TYPE::LOCK:
+        case GAME_TYPE::WIN:
+        case GAME_TYPE::LOST:
+        case GAME_TYPE::UPDATEGRID:
         default:
             std::cerr << "[SERVER] Erreur: Type de message de jeu inconnu."
                       << std::endl;
@@ -227,54 +235,141 @@ void GameMessage::handleMessage(const std::string& message, int clientSocket) {
     }
 }
 
-void GameMessage::handleSpawnTetraminoMsg(const char* details,
-                                          int clientSocket) {
-    GameServer game;
+
+void updateScore(uint32_t score, int PlayerID) {
+    Server& server = Server::getInstance();
+    pqxx::connection* db = server.getDB();
+    pqxx::work transaction(*db);
+    // get current score for the player
+    pqxx::result result = transaction.exec_params(
+        "SELECT high_score FROM score WHERE id = $1",PlayerID);
+    for (auto row : result) {
+        uint32_t currentScore = row[0].as<uint32_t>();
+        if(currentScore < score) {
+            std::cout << "New high score for player " << PlayerID << ": "
+                      << score << std::endl;
+            transaction.exec_params(
+            "UPDATE score SET high_score = $1 WHERE id = $2", score,
+            PlayerID);
+        }
+    }
+    transaction.commit();
+}
+
+void GameMessage::handleTetraminoMsg(int clientSocket) {
     Server& server = Server::getInstance();
     auto player = server.getPlayer(clientSocket);
-    if (!player) return;
+    updateScore(player->gameState->points_, player->ID);
+    auto players = server.getClients();
+    auto gameRoom = player->gameRoom;
+    GameServer game(player, player->gameState);
+    if (!player or !player->isPlaying or !gameRoom) return;
 
     SpawnTetraminoPayload payload;
-    memcpy(&payload, details, sizeof(SpawnTetraminoPayload));
 
-    if (!game.handleSpawnTetramino(player, payload)) {
-        HeaderResponse header;
-        header.type = MESSAGE_TYPE::GAME;
-        header.sizeMessage = sizeof(GameTypeHeader);
-
-        GameTypeHeader gameHeader;
-        gameHeader.type = GAME_TYPE::LOST;
-
-        char LosingMsg[sizeof(HeaderResponse) + sizeof(GameTypeHeader)];
-        memcpy(LosingMsg, &header, sizeof(HeaderResponse));
-        memcpy(LosingMsg + sizeof(HeaderResponse), &gameHeader, sizeof(GameTypeHeader));
-
-        if (player->gameRoom->countAlivePlayers() == 2) {
-            GameTypeHeader gameHeader2;
-            gameHeader2.type = GAME_TYPE::WIN;
-
-            char WiningMsg[sizeof(HeaderResponse) + sizeof(GameTypeHeader)];
-            memcpy(WiningMsg, &header, sizeof(HeaderResponse));
-            memcpy(WiningMsg + sizeof(HeaderResponse), &gameHeader2, sizeof(GameTypeHeader));
-            server.sendMessage(game.getOpponentSocket(player), WiningMsg, sizeof(WiningMsg));
+    if (!game.handleTetramino(payload)) {
+        if (gameRoom->countAlivePlayers() == 2) {
+            sendWinMsg(server, gameRoom, players, game);
+        }
+        sendLoseMsg(player, server, gameRoom, clientSocket);
+        
+        if (gameRoom->countAlivePlayers() == 0) {  // For spectators
+            sendEndGameMsg(gameRoom);
         }
 
-        player->gameRoom->removePlayer(player);
-        server.sendMessage(clientSocket, LosingMsg, sizeof(LosingMsg));
+    } else {
+        sendTetraminoMsg(payload, server, clientSocket);
     }
 }
 
+void GameMessage::sendWinMsg(Server& server, 
+                            std::shared_ptr<GameRoom> gameRoom, 
+                            std::map<int, std::shared_ptr<Player>> players, 
+                            GameServer game) {
+    HeaderResponse header;
+    header.type = MESSAGE_TYPE::GAME;
+    header.sizeMessage = sizeof(GameTypeHeader);
+
+    GameTypeHeader gameHeader;
+    gameHeader.type = GAME_TYPE::WIN;
+
+    char WiningMsg[sizeof(HeaderResponse) + sizeof(GameTypeHeader)];
+    memcpy(WiningMsg, &header, sizeof(HeaderResponse));
+    memcpy(WiningMsg + sizeof(HeaderResponse), &gameHeader,
+            sizeof(GameTypeHeader));
+
+    int opponentSocket = game.getOpponentSocket();
+    server.sendMessage(opponentSocket, WiningMsg, sizeof(WiningMsg));
+    gameRoom->playerLeaves(players[opponentSocket]);
+    players[opponentSocket]->gameState = nullptr;
+    players[opponentSocket]->isPlaying = false;
+}
+
+void GameMessage::sendLoseMsg(std::shared_ptr<Player>& player, 
+                            Server& server, 
+                            std::shared_ptr<GameRoom> gameRoom,
+                            int clientSocket) {
+    HeaderResponse header;
+    header.type = MESSAGE_TYPE::GAME;
+    header.sizeMessage = sizeof(GameTypeHeader);
+
+    GameTypeHeader gameHeader;
+    gameHeader.type = GAME_TYPE::LOST;
+
+    char LosingMsg[sizeof(HeaderResponse) + sizeof(GameTypeHeader)];
+    memcpy(LosingMsg, &header, sizeof(HeaderResponse));
+    memcpy(LosingMsg + sizeof(HeaderResponse), &gameHeader,
+            sizeof(GameTypeHeader));
+
+    server.sendMessage(clientSocket, LosingMsg, sizeof(LosingMsg));
+    gameRoom->playerLeaves(player);
+    player->gameState = nullptr;
+    player->isPlaying = false;
+}
+
+void GameMessage::sendTetraminoMsg(SpawnTetraminoPayload& payload,
+                                    Server& server,
+                                    int clientSocket) {
+    HeaderResponse header;
+    header.type = MESSAGE_TYPE::GAME;
+    header.sizeMessage = sizeof(GameTypeHeader) + sizeof(SpawnTetraminoPayload);
+
+    GameTypeHeader gameHeader;
+    gameHeader.type = GAME_TYPE::TETRAMINO_REQUEST;
+
+    char TetraminoMsg[sizeof(HeaderResponse) + sizeof(GameTypeHeader) + sizeof(SpawnTetraminoPayload)];
+    memcpy(TetraminoMsg, &header, sizeof(HeaderResponse));
+    memcpy(TetraminoMsg + sizeof(HeaderResponse), &gameHeader,
+            sizeof(GameTypeHeader));
+    memcpy(TetraminoMsg + sizeof(HeaderResponse) + sizeof(GameTypeHeader), &payload,
+            sizeof(SpawnTetraminoPayload));
+    server.sendMessage(clientSocket, TetraminoMsg, sizeof(TetraminoMsg));
+}
+
+void GameMessage::sendEndGameMsg(std::shared_ptr<GameRoom> gameRoom) {
+    char buffer[BUFFER_SIZE];
+    HeaderResponse header = {MESSAGE_TYPE::GAME, sizeof(GameTypeHeader)};
+    memcpy(buffer, &header, sizeof(HeaderResponse));
+    GameTypeHeader gameHeader;
+    gameHeader.type = GAME_TYPE::END;
+    memcpy(buffer + sizeof(HeaderResponse), &gameHeader,
+           sizeof(GameTypeHeader));
+    gameRoom->broadcast(-1, buffer,
+                        sizeof(HeaderResponse) + sizeof(GameTypeHeader));
+    gameRoom->setRunning(false);
+}
+
 void GameMessage::handleMoveMsg(const char* details, int clientSocket) {
-    GameServer game;
     Server& server = Server::getInstance();
     auto player = server.getPlayer(clientSocket);
-    if (!player) return;
+    GameServer game(player, player->gameState);
+    if (!player or !player->isPlaying) return;
 
     MovementPayload payload;
     memcpy(&payload, details, sizeof(MovementPayload));
 
     GameUpdateHeader update;
-    game.handleMove(player, update, payload);
+    game.handleMove(update, payload);
 
     HeaderResponse header;
     header.type = MESSAGE_TYPE::GAME;
@@ -287,116 +382,182 @@ void GameMessage::handleMoveMsg(const char* details, int clientSocket) {
         gameHeader.type = GAME_TYPE::LOCK;
     }
 
-    char response[sizeof(HeaderResponse) + sizeof(GameTypeHeader) + sizeof(GameUpdateHeader)];
+    char response[sizeof(HeaderResponse) + sizeof(GameTypeHeader) +
+                  sizeof(GameUpdateHeader)];
     memcpy(response, &header, sizeof(HeaderResponse));
-    memcpy(response + sizeof(HeaderResponse), &gameHeader, sizeof(GameTypeHeader));
-    memcpy(response + sizeof(HeaderResponse) + sizeof(GameTypeHeader), &update, sizeof(GameUpdateHeader));
+    memcpy(response + sizeof(HeaderResponse), &gameHeader,
+           sizeof(GameTypeHeader));
+    memcpy(response + sizeof(HeaderResponse) + sizeof(GameTypeHeader), &update,
+           sizeof(GameUpdateHeader));
 
     server.sendMessage(clientSocket, response, sizeof(response));
 }
 
 void GameMessage::handleRotateMsg(const char* details, int clientSocket) {
-    GameServer game;
     Server& server = Server::getInstance();
     auto player = server.getPlayer(clientSocket);
     if (!player) return;
+    GameServer game(player, player->gameState);
 
     RotationPayload payload;
     memcpy(&payload, details, sizeof(RotationPayload));
 
     GameUpdateHeader update;
-    game.handleRotate(player, update, payload);
 
-    HeaderResponse header;
-    header.type = MESSAGE_TYPE::GAME;
-    header.sizeMessage = sizeof(GameTypeHeader) + sizeof(GameUpdateHeader);
+    // si rotation possible, alors on envoie la confirmation
+    if (game.handleRotate(update, payload)) {
+        HeaderResponse header;
+        header.type = MESSAGE_TYPE::GAME;
+        header.sizeMessage = sizeof(GameTypeHeader) + sizeof(GameUpdateHeader);
 
-    GameTypeHeader gameHeader;
-    gameHeader.type = GAME_TYPE::ROTATE;
+        GameTypeHeader gameHeader;
+        gameHeader.type = GAME_TYPE::ROTATE;
 
-    char response[sizeof(HeaderResponse) + sizeof(GameTypeHeader) + sizeof(GameUpdateHeader)];
-    memcpy(response, &header, sizeof(HeaderResponse));
-    memcpy(response + sizeof(HeaderResponse), &gameHeader, sizeof(GameTypeHeader));
-    memcpy(response + sizeof(HeaderResponse) + sizeof(GameTypeHeader), &update, sizeof(GameUpdateHeader));
+        char response[sizeof(HeaderResponse) + sizeof(GameTypeHeader) +
+                      sizeof(GameUpdateHeader)];
+        memcpy(response, &header, sizeof(HeaderResponse));
+        memcpy(response + sizeof(HeaderResponse), &gameHeader,
+               sizeof(GameTypeHeader));
+        memcpy(response + sizeof(HeaderResponse) + sizeof(GameTypeHeader),
+               &update, sizeof(GameUpdateHeader));
 
-    server.sendMessage(clientSocket, response, sizeof(response));
+        server.sendMessage(clientSocket, response, sizeof(response));
+    }
 }
 
-void GameMessage::handleConfirmMalusMsg(const char* details, int clientSocket) {
-    GameServer game;
+void GameMessage::handleMalusAuthorisationMsg(int clientSocket) {
+    Server& server = Server::getInstance();
+    auto player = server.getPlayer(clientSocket);
+    if (!player) return;
+
+    if (player->gameRoom->getGameMode() == "Tetris Royal" &&
+        player->energy > 0) {
+        player->energy--;
+        HeaderResponse header;
+        header.type = MESSAGE_TYPE::GAME;
+        header.sizeMessage = sizeof(GameTypeHeader);
+
+        GameTypeHeader gameHeader;
+        gameHeader.type = GAME_TYPE::MALUS_AUTHORISATION;
+
+        char response[sizeof(HeaderResponse) + sizeof(GameTypeHeader)];
+        memcpy(response, &header, sizeof(HeaderResponse));
+        memcpy(response + sizeof(HeaderResponse), &gameHeader,
+               sizeof(GameTypeHeader));
+
+        server.sendMessage(clientSocket, response, sizeof(response));
+    }
+}
+
+void GameMessage::handleBonusAuthorisationMsg(int clientSocket) {
+    Server& server = Server::getInstance();
+    auto player = server.getPlayer(clientSocket);
+    if (!player) return;
+
+    if (player->gameRoom->getGameMode() == "Tetris Royal" &&
+        player->energy > 0) {
+        player->energy--;
+        HeaderResponse header;
+        header.type = MESSAGE_TYPE::GAME;
+        header.sizeMessage = sizeof(GameTypeHeader);
+
+        GameTypeHeader gameHeader;
+        gameHeader.type = GAME_TYPE::BONUS_AUTHORISATION;
+
+        char response[sizeof(HeaderResponse) + sizeof(GameTypeHeader)];
+        memcpy(response, &header, sizeof(HeaderResponse));
+        memcpy(response + sizeof(HeaderResponse), &gameHeader,
+               sizeof(GameTypeHeader));
+
+        server.sendMessage(clientSocket, response, sizeof(response));
+    }
+}
+
+void GameMessage::handleMalusMsg(const char* details, int clientSocket) {
     Server& server = Server::getInstance();
 
     auto player = server.getPlayer(clientSocket);
     if (!player) return;
 
-    MalusPayload payload;
-    memcpy(&payload, details, sizeof(MalusPayload));
-
-    game.handleConfirmMalus(player, payload);
-}
-
-void GameMessage::handleMalusMsg(const char* details, int clientSocket) {
-    Server& server = Server::getInstance();
-    auto sender = server.getPlayer(clientSocket);
-
-    if (!sender) {
-        std::cerr << "[SERVER] Erreur : joueur introuvable pour le socket "
-                  << clientSocket << std::endl;
-        return;
-    }
+    GameServer game(player, player->gameState);
 
     MalusPayload payload;
     memcpy(&payload, details, sizeof(MalusPayload));
 
-    std::cout << "[SERVER] Type de Malus reçu " << payload.malusType
-              << " envoyé par joueur " << clientSocket << " au joueur "
-              << payload.targetSocket << std::endl;
+    game.handleMalus(payload);
 
-    // Envoyer le malus au joueur ciblé
-    server.sendMessage(payload.targetSocket, &payload, sizeof(payload));
+    HeaderResponse header;
+    header.type = MESSAGE_TYPE::GAME;
+    header.sizeMessage = sizeof(GameTypeHeader) + sizeof(MalusPayload);
+
+    GameTypeHeader gameHeader;
+    gameHeader.type = GAME_TYPE::MALUS;
+
+    char response[sizeof(HeaderResponse) + sizeof(GameTypeHeader) +
+                      sizeof(MalusPayload)];
+    memcpy(response, &header, sizeof(HeaderResponse));
+    memcpy(response + sizeof(HeaderResponse), &gameHeader,
+           sizeof(GameTypeHeader));
+    memcpy(response + sizeof(HeaderResponse) + sizeof(GameTypeHeader),
+           &payload, sizeof(MalusPayload));
+
+    int targetSocket = game.IdToSocket(payload.target);
+    server.sendMessage(targetSocket, response, sizeof(response));
 }
 
 void GameMessage::handleBonusMsg(const char* details, int clientSocket) {
     Server& server = Server::getInstance();
-    auto sender = server.getPlayer(clientSocket);
 
-    if (!sender) {
-        std::cerr << "[SERVER] Erreur : joueur introuvable pour le socket "
-                  << clientSocket << std::endl;
-        return;
-    }
+    auto player = server.getPlayer(clientSocket);
+    if (!player) return;
+
+    GameServer game(player, player->gameState);
 
     BonusPayload payload;
     memcpy(&payload, details, sizeof(BonusPayload));
 
-    std::cout << "[SERVER] Type de Bonus reçu " << payload.type
-              << " envoyé par joueur " << clientSocket << std::endl;
-
-    server.broadcastToLobby(clientSocket, &payload, sizeof(BonusPayload));
+    game.handleBonus(payload);
 }
 
 void GameMessage::handleStartMsg(int clientSocket) {
     Server& server = Server::getInstance();
     auto lobby = server.getLobbyForClient(clientSocket);
+    auto player = server.getPlayer(clientSocket);
+    if (!lobby || !player) return;
+    player->isPlaying = true;
 
-    if (lobby) {
+    /* if (lobby) {
         GameUpdateHeader update;
         update.type = GAME_TYPE::START;
         server.broadcastToLobby(clientSocket, &update, sizeof(update));
-    }
+    } */
 }
 
 void GameMessage::handleEndMsg(int clientSocket) {
     Server& server = Server::getInstance();
     auto player = server.getPlayer(clientSocket);
-
     if (player) {
-        GameEndHeader end{
-            .type = GAME_TYPE::END,
-            .score = uint32_t(player->gameState->points_),
-            .isWinner = server.checkWinner(player->gameState->points_)};
-        server.broadcastToLobby(clientSocket, &end, sizeof(end));
-        server.cleanupLobby(clientSocket);
+        std::shared_ptr<GameRoom> gameRoom = player->gameRoom;
+        HeaderResponse header = {MESSAGE_TYPE::GAME, sizeof(GameEndHeader)};
+        GameEndHeader end;
+        end.type = GAME_TYPE::END;
+        end.score = uint32_t(player->gameState->points_);
+        updateScore(end.score, player->ID);
+        end.isWinner = server.checkWinner(player->gameState->points_);
+        char buffer[sizeof(HeaderResponse) + sizeof(GameEndHeader)];
+        memcpy(buffer, &header, sizeof(HeaderResponse));
+        memcpy(buffer + sizeof(HeaderResponse), &end, sizeof(GameEndHeader));
+        server.sendMessage(clientSocket, buffer,
+                           sizeof(HeaderResponse) + sizeof(GameEndHeader));
+        if (gameRoom->countAlivePlayers() == 1) {
+            gameRoom->setPlaying(false);
+        }
+        gameRoom->playerLeaves(player);
+        player->gameState = nullptr;
+        player->isPlaying = false;
+        if (gameRoom->countAlivePlayers() == 0) {  // For spectators
+            sendEndGameMsg(gameRoom);
+        }
     }
 }
 
@@ -438,40 +599,53 @@ void LobbyMessage::handleMessage(const std::string& message, int clientSocket) {
 void LobbyMessage::handleCreate(const std::string& message, int clientSocket) {
     Server& server = Server::getInstance();
     LobbyHeader header;
+
     std::map<int, std::shared_ptr<Player>>& clients = server.getClients();
 
     memcpy(&header, message.c_str(), sizeof(LobbyHeader));
+
     std::shared_ptr<GameRoom> gameRoom = std::make_shared<GameRoom>();
     gameRoom->setGroupeLeader(clients[clientSocket]->ID);
     gameRoom->setGameMode(header.gameMode);
     gameRoom->setNbrPlayers(header.nbPlayers);
+
     std::vector<std::pair<int, std::shared_ptr<GameRoom>>>& gameRooms =
         server.getGameRooms();
+
+    // génère un nouvel ID de room
     if (gameRooms.size() == 0) {
         gameRoom->setRoomId(1);
     } else {
         gameRoom->setRoomId(gameRooms.back().first + 1);
     }
+
     int roomId = server.addGameRoom(gameRoom, clientSocket);
     if (roomId == -1) {
         std::cerr << "Failed to create game room" << std::endl;
         return;
     }
+
+    // Le créateur de la room rejoint directement la room
     gameRoom->addPlayer(clients[clientSocket], true);
+
     LobbyResponseHeader response = {LOBBY_RESPONSE::CREATED, roomId};
     server.sendMessage(clientSocket, &response, sizeof(response));
 
     std::cout << "Game room created with ID " << roomId << std::endl;
+
     pthread_t thread;
     pthread_create(&thread, nullptr, GameRoom::loop, gameRoom.get());
 }
 
 void LobbyMessage::handleModify(const std::string& message) {
     Server& server = Server::getInstance();
+
     LobbyHeader header;
     memcpy(&header, message.c_str(), sizeof(LobbyHeader));
+
     std::vector<std::pair<int, std::shared_ptr<GameRoom>>>& gameRooms =
         server.getGameRooms();
+
     int index = server.findRoomIndex(gameRooms, header.idRoom);
 
     if (index != -1) {
@@ -489,22 +663,30 @@ void LobbyMessage::handleJoin(const std::string& message, int clientSocket) {
 
     LobbyHeader header;
     memcpy(&header, message.c_str(), sizeof(LobbyHeader));
+
     std::vector<std::pair<int, std::shared_ptr<GameRoom>>>& gameRooms =
         server.getGameRooms();
     std::map<int, std::shared_ptr<Player>>& clients = server.getClients();
+
     int index = server.findRoomIndex(gameRooms, header.idRoom);
     if (index != -1) {
+        // vérifie dans la BDD que le joueur a été invité à cette room
         pqxx::result res = transaction.exec_params(
-            "SELECT * FROM game_invitation WHERE id_player_invited = $1 AND "
+            "SELECT * FROM game_invitation WHERE id_player_invited = $1 "
+            "AND "
             "room_id = $2",
             clients[clientSocket]->ID, header.idRoom);
 
         if (res.empty()) {
-            std::cerr << "std::shared_ptr<Player> not invited to the game room" << std::endl;
+            std::cerr << "std::shared_ptr<Player> not invited to the game room"
+                      << std::endl;
             return;
         }
 
-        bool asGamer = res[0]["as_gamer"].as<bool>();
+        LobbyJoinning lobbyJoinning;
+        memcpy(&lobbyJoinning, message.c_str() + sizeof(LobbyHeader),
+               sizeof(LobbyJoinning));
+        bool asGamer = lobbyJoinning.asGamer;
 
         server.removeActivePlayer(clientSocket);
         gameRooms[index].second->addPlayer(clients[clientSocket], asGamer);
@@ -514,12 +696,15 @@ void LobbyMessage::handleJoin(const std::string& message, int clientSocket) {
 
 void LobbyMessage::handleLeave(const std::string& message, int clientSocket) {
     Server& server = Server::getInstance();
+
     LobbyHeader header;
     memcpy(&header, message.c_str(), sizeof(LobbyHeader));
+
     std::vector<std::pair<int, std::shared_ptr<GameRoom>>>& gameRooms =
         server.getGameRooms();
-    int index = server.findRoomIndex(gameRooms, header.idRoom);
     std::map<int, std::shared_ptr<Player>>& clients = server.getClients();
+
+    int index = server.findRoomIndex(gameRooms, header.idRoom);
     if (index != -1) {
         gameRooms[index].second->playerLeaves(clients[clientSocket]);
     } else {
@@ -529,11 +714,14 @@ void LobbyMessage::handleLeave(const std::string& message, int clientSocket) {
 
 void LobbyMessage::handleStart(const std::string& msg, int clientSocket) {
     Server& server = Server::getInstance();
+
     std::vector<std::pair<int, std::shared_ptr<GameRoom>>>& gameRooms =
         server.getGameRooms();
     std::map<int, std::shared_ptr<Player>>& clients = server.getClients();
+
     LobbyHeader header;
     memcpy(&header, msg.c_str(), sizeof(LobbyHeader));
+
     int index = server.findRoomIndex(gameRooms, header.idRoom);
     if (index != -1) {
         gameRooms[index].second->handleStartRequest(clients[clientSocket]);
@@ -545,6 +733,7 @@ void LobbyMessage::handleInviteFriend(const std::string& message,
     LobbyInviteFriend invite;
     memcpy(&invite, message.substr(sizeof(LobbyHeader)).c_str(),
            sizeof(LobbyInviteFriend));
+
     // Add logic to invite a friend to the lobby
     std::string userName(invite.nameInviting);
     int roomId = invite.idRoom;
@@ -566,6 +755,7 @@ void LobbyMessage::handleInviteFriend(const std::string& message,
         std::cout << "User not found" << std::endl;
         return;
     }
+
     UserAccount userAccount = userDatabase[userName];
     int invitedPlayerID = userAccount.playerID;
     std::shared_ptr<Player> invitingPlayer = clientsConnected[clientSocket];
@@ -584,10 +774,14 @@ void LobbyMessage::handleInviteFriend(const std::string& message,
 int LobbyMessage::serializeErrorLobby(const std::string& msg, char* buffer) {
     HeaderResponse response = {MESSAGE_TYPE::LOBBY,
                                sizeof(LobbyResponseHeader)};
+
     LobbyResponseHeader lobbyResponse = {LOBBY_RESPONSE::ERROR, -1};
+
     LobbyErrorResponse lobbyErrorResponse = {uint32_t(msg.size())};
+
     response.sizeMessage = sizeof(LobbyResponseHeader) +
                            sizeof(LobbyErrorResponse) + uint32_t(msg.size());
+
     memcpy(buffer, &response, sizeof(HeaderResponse));
     memcpy(buffer + sizeof(HeaderResponse), &lobbyResponse,
            sizeof(LobbyResponseHeader));
@@ -596,12 +790,12 @@ int LobbyMessage::serializeErrorLobby(const std::string& msg, char* buffer) {
     memcpy(buffer + sizeof(HeaderResponse) + sizeof(LobbyResponseHeader) +
                sizeof(LobbyErrorResponse),
            msg.c_str(), uint32_t(msg.size()));
+
     return int(sizeof(HeaderResponse) + sizeof(LobbyResponseHeader) +
                sizeof(LobbyErrorResponse) + uint32_t(msg.size()));
 }
 
 void SystemMessage::handleMessage(const std::string& message,
-
                                   int clientSocket) {
     std::cout << "System message: " << message << clientSocket << std::endl;
 }
@@ -638,13 +832,28 @@ void SocialMessage::handleMessage(const std::string& message,
         case SOCIAL_TYPE::LEAVE_CHAT:
             leaveChat(message, clientSocket);
             break;
+        case SOCIAL_TYPE::REMOVE_FRIEND:
+            removeFriend(message, clientSocket);
+            break;
+        case SOCIAL_TYPE::GET_USERS:
+            getUsers(message, clientSocket);
+            break;
+        case SOCIAL_TYPE::UPDATE_HIGHSCORE:
+            updateHighScore(message, clientSocket);
+            break;
+        default:
+            std::cerr << "[SERVER] Erreur: Type de message social inconnu."
+                      << std::endl;
+            break;
     }
 }
 
 void SocialMessage::handleGetLobbyInvite(const std::string& message,
                                          int clientSocket) {
     std::cout << message << std::endl;  // just to avoid warning
+
     Server& server = Server::getInstance();
+
     pqxx::connection* db = server.getDB();
     auto& clientsConnected = server.getClients();
     int playerID = clientsConnected[clientSocket]->ID;
@@ -654,6 +863,7 @@ void SocialMessage::handleGetLobbyInvite(const std::string& message,
                                      sizeof(HeaderResponse)};
     LobbyInvitation lobbyInvite;
     SocialResponseLobbyInvite response;
+    
     int invitation = 0;
     size_t baseSize =
         sizeof(HeaderResponse) + sizeof(SocialResponseLobbyInvite);
@@ -707,160 +917,192 @@ void SocialMessage::handleGetLobbyInvite(const std::string& message,
 }
 
 void SocialMessage::inviteFriend(const std::string& message, int clientSocket) {
+    std::cout << "Invite friend message: " << clientSocket << std::endl;
     Server& server = Server::getInstance();
     auto& userDatabase = server.getUserDatabase();
     auto& clientsConnected = server.getClients();
-    
-    FriendHeader friendHeader;
+
+    PlayerHeader friendHeader;
     memcpy(&friendHeader, message.c_str() + sizeof(SocialHeader),
-           sizeof(FriendHeader));
+           sizeof(PlayerHeader));
     std::string userNameStr(friendHeader.username);
-    
+
     HeaderResponse response;
-    response.type = MESSAGE_TYPE::INVITEFRIEND;
+    response.type = MESSAGE_TYPE::SOCIAL;
+    response.sizeMessage = sizeof(PlayerHeader);
     std::shared_ptr<Player> invitingPlayer = clientsConnected[clientSocket];
-    
+
     if (userDatabase.find(userNameStr) == userDatabase.end()) {
-        response.status = FRIEND_REQUEST_STATUS::PLAYER_NOT_FOUND;
+        friendHeader.status = FRIEND_REQUEST_STATUS::PLAYER_NOT_FOUND;
     } else {
         UserAccount userAccount = userDatabase[userNameStr];
         int invitedPlayerID = userAccount.playerID;
         int invitingPlayerId = invitingPlayer->ID;
-        
+
         if (invitingPlayerId == invitedPlayerID) {
-            std::cout << "std::shared_ptr<Player> " << invitingPlayerId << " tried to add themselves as a friend" << std::endl;
-            response.status = FRIEND_REQUEST_STATUS::SELF_ADD_FORBIDDEN;
+            std::cout << "Player " << invitingPlayerId
+                      << " tried to add themselves as a friend" << std::endl;
+            friendHeader.status = FRIEND_REQUEST_STATUS::SELF_ADD_FORBIDDEN;
         } else {
-            response.status = processInviteRequest(invitingPlayerId, invitedPlayerID, server.getDB());
+            friendHeader.status = processInviteRequest(
+                invitingPlayerId, invitedPlayerID, server.getDB());
         }
     }
-    
-    char buffer[BUFFER_SIZE];
+
+    char buffer[sizeof(HeaderResponse) + sizeof(PlayerHeader)];
     memset(buffer, 0, sizeof(buffer));
     memcpy(buffer, &response, sizeof(HeaderResponse));
-    if(server.sendMessage(clientSocket, buffer, sizeof(HeaderResponse)) == 0) {
-        std::cout << "Failed to send friend request status to client " << clientSocket << std::endl;
+    memcpy(buffer + sizeof(HeaderResponse), &friendHeader,
+           sizeof(PlayerHeader));
+    if (server.sendMessage(clientSocket, buffer,
+                           sizeof(HeaderResponse) + sizeof(PlayerHeader)) ==
+        0) {
+        std::cout << "Failed to send friend request status to client "
+                  << clientSocket << std::endl;
     } else {
-        std::cout << "Friend request status sent to client " << clientSocket << std::endl;
+        std::cout << "Friend request status sent to client " << clientSocket
+                  << std::endl;
     }
 }
 
-
-FRIEND_REQUEST_STATUS SocialMessage::processInviteRequest(int invitingPlayerId, int invitedPlayerID, pqxx::connection* db) {
+FRIEND_REQUEST_STATUS SocialMessage::processInviteRequest(
+    int invitingPlayerId, int invitedPlayerID, pqxx::connection* db) {
     pqxx::work txn(*db);
-    
+
     // Check if already in friend list
     pqxx::result result = txn.exec_params(
-        "SELECT friend_id FROM friend_list WHERE player_id = $1 AND friend_id = $2;",
-        invitingPlayerId, invitedPlayerID
-    );
-    
+        "SELECT friend_id FROM friend_list WHERE player_id = $1 AND "
+        "friend_id "
+        "= $2;",
+        invitingPlayerId, invitedPlayerID);
+
     if (!result.empty()) {
         return FRIEND_REQUEST_STATUS::ALREADY_IN_LIST;
     }
-    
+
     // Check if request already sent
     pqxx::result res = txn.exec_params(
-        "SELECT 1 FROM friend_request WHERE id_player_inviting = $1 AND id_player_invited = $2;",
-        invitingPlayerId, invitedPlayerID
-    );
-    
+        "SELECT 1 FROM friend_request WHERE id_player_inviting = $1 AND "
+        "id_player_invited = $2;",
+        invitingPlayerId, invitedPlayerID);
+
     if (!res.empty()) {
         return FRIEND_REQUEST_STATUS::FRIEND_REQUEST_ALREADY_SENT;
     }
-    
+
     // Success case - insert the request
     txn.exec_params(
-        "INSERT INTO friend_request (id_player_inviting, id_player_invited) VALUES ($1, $2);",
-        invitingPlayerId, invitedPlayerID
-    );
+        "INSERT INTO friend_request (id_player_inviting, "
+        "id_player_invited) "
+        "VALUES ($1, $2);",
+        invitingPlayerId, invitedPlayerID);
     txn.commit();
-    
-    std::cout << "Friend request sent from " << invitingPlayerId << " to " << invitedPlayerID << std::endl;
+
+    std::cout << "Friend request sent from " << invitingPlayerId << " to "
+              << invitedPlayerID << std::endl;
     return FRIEND_REQUEST_STATUS::FRIEND_REQUEST_SENT;
 }
 
-void SocialMessage::getFriendData(const std::string& message, int clientSocket, 
-    const std::string& queryTemplate, const std::string& countQueryTemplate) {
-    FriendHeader header;
+void SocialMessage::getFriendData(const std::string& message, int clientSocket,
+                                  const std::string& queryTemplate,
+                                  const std::string& countQueryTemplate,
+                                  SOCIAL_TYPE type) {
     Server& server = Server::getInstance();
     auto& userDatabase = server.getUserDatabase();
     pqxx::connection* db = server.getDB();
     pqxx::work txn(*db);
 
-    FriendHeader friendHeader;
+    PlayerHeader playerHeader;
+    PlayerHeader friendHeader;
     memcpy(&friendHeader, message.c_str() + sizeof(SocialHeader),
-           sizeof(FriendHeader));
-    std::string userNameStr(friendHeader.username);
+           sizeof(PlayerHeader));
     std::string playerIDstr(std::to_string(friendHeader.idPlayer));
 
     pqxx::result result = txn.exec_params(queryTemplate, playerIDstr);
     pqxx::result countResult = txn.exec_params(countQueryTemplate, playerIDstr);
 
-    int count = countResult[0][0].as<int>();    
-    char countbuffer[sizeof(int)];
+    HeaderResponse countHeader = {MESSAGE_TYPE::SOCIAL, sizeof(int)};
+    int count = countResult[0][0].as<int>();
+    char countbuffer[sizeof(int) + sizeof(HeaderResponse)];
     memset(countbuffer, 0, sizeof(countbuffer));
-    memcpy(countbuffer, &count, sizeof(int));
-    server.sendMessage(clientSocket, countbuffer, sizeof(int));
+    memcpy(countbuffer, &countHeader, sizeof(HeaderResponse));
+    memcpy(countbuffer + sizeof(HeaderResponse), &count, sizeof(int));
+    server.sendMessage(clientSocket, countbuffer,
+                       sizeof(int) + sizeof(HeaderResponse));
 
- 
     for (const auto& row : result) {
-        char buffer[sizeof(FriendHeader)];
-        header.idPlayer = row[0].as<int>();
+        HeaderResponse headerResponse = {
+            MESSAGE_TYPE::SOCIAL, sizeof(PlayerHeader) + sizeof(SocialHeader)};
+        char buffer[sizeof(PlayerHeader) + sizeof(HeaderResponse) +
+                    sizeof(SocialHeader)];
+        playerHeader.idPlayer = row[0].as<int>();
         for (const auto& f : userDatabase) {
-            if (f.second.playerID == header.idPlayer) {
-                strcpy(header.username, f.second.username.c_str());
+            if (f.second.playerID == playerHeader.idPlayer) {
+                strcpy(playerHeader.username, f.second.username.c_str());
             }
         }
 
+        SocialHeader socialHeader;
+        socialHeader.type = type;
         memset(buffer, 0, sizeof(buffer));
-        memcpy(buffer, &header, sizeof(FriendHeader));
-        if(!server.sendMessage(clientSocket, buffer, sizeof(FriendHeader))) {
-            std::cout << "Failed to send friend data to client " << clientSocket << std::endl;
+        memcpy(buffer, &headerResponse, sizeof(HeaderResponse));
+        memcpy(buffer + sizeof(HeaderResponse), &socialHeader,
+               sizeof(SocialHeader));
+        memcpy(buffer + sizeof(HeaderResponse) + sizeof(SocialHeader),
+               &playerHeader, sizeof(PlayerHeader));
+        if (!server.sendMessage(clientSocket, buffer,
+                                sizeof(PlayerHeader) + sizeof(HeaderResponse) +
+                                    sizeof(SocialHeader))) {
+            std::cout << "Failed to send friend data to client " << clientSocket
+                      << std::endl;
+        } else {
+            std::cout << "Friend data sent to client " << clientSocket
+                      << std::endl;
         }
-        else {
-            std::cout << "Friend data sent to client " << clientSocket << std::endl;
-        }  
+    }
+    txn.commit();
 }
-
-txn.commit();
-}
-void SocialMessage::getFriendRequest(const std::string& message, int clientSocket) {
+void SocialMessage::getFriendRequest(const std::string& message,
+                                     int clientSocket) {
     std::cout << "Friend request list requested" << std::endl;
-    
-    const std::string query = 
-        "SELECT id_player_inviting FROM friend_request WHERE id_player_invited = $1;";
-    const std::string countQuery = 
+
+    const std::string query =
+        "SELECT id_player_inviting FROM friend_request WHERE "
+        "id_player_invited "
+        "= $1;";
+    const std::string countQuery =
         "SELECT COUNT(*) FROM friend_request WHERE id_player_invited = $1;";
-    
-    getFriendData(message, clientSocket, query, countQuery);
+
+    getFriendData(message, clientSocket, query, countQuery,
+                  SOCIAL_TYPE::GET_FRIEND_REQUEST);
 }
 
-void SocialMessage::getFriendList(const std::string& message, int clientSocket) {
+void SocialMessage::getFriendList(const std::string& message,
+                                  int clientSocket) {
     std::cout << "Friend list requested" << std::endl;
-    
-    const std::string query = 
+
+    const std::string query =
         "SELECT friend_id FROM friend_list WHERE player_id = $1;";
-    const std::string countQuery = 
+    const std::string countQuery =
         "SELECT COUNT(*) FROM friend_list WHERE player_id = $1;";
-    
-    getFriendData(message, clientSocket, query, countQuery);
+
+    getFriendData(message, clientSocket, query, countQuery,
+                  SOCIAL_TYPE::GET_FRIEND_LIST);
 }
-
-
 
 void SocialMessage::acceptFriendinvite(const std::string& message,
                                        int clientSocket) {
     Server& server = Server::getInstance();
     auto& clientsConnected = server.getClients();
-    FriendHeader friendHeader;
+    PlayerHeader friendHeader;
     memcpy(&friendHeader, message.c_str() + sizeof(SocialHeader),
-           sizeof(FriendHeader));
+           sizeof(PlayerHeader));
     std::string userNameStr(friendHeader.username);
     std::string playerIDstr(std::to_string(friendHeader.idPlayer));
- 
+
     std::shared_ptr<Player> invitedPlayer = clientsConnected[clientSocket];
-    std::cout << invitedPlayer->username << " accepted friend request from: " << userNameStr << std::endl;
+    std::cout << invitedPlayer->username
+              << " accepted friend request from: " << userNameStr << std::endl;
     int invitedPlayerID = invitedPlayer->ID;
     pqxx::connection* db = server.getDB();
     pqxx::work txn(*db);
@@ -870,93 +1112,172 @@ void SocialMessage::acceptFriendinvite(const std::string& message,
         "id_player_invited = $1);",
         playerIDstr, invitedPlayerID);
     txn.exec_params(
-        "INSERT INTO friend_list (player_id, friend_id) VALUES ($1, $2), ($2, $1);", playerIDstr, invitedPlayerID
-    );
+        "INSERT INTO friend_list (player_id, friend_id) VALUES ($1, $2), "
+        "($2, "
+        "$1);",
+        playerIDstr, invitedPlayerID);
     txn.commit();
-    std::cout << "Message saved to database!" << std::endl;
 }
 
-void SocialMessage::saveMessageToDatabase(int senderId, int receiverId, const std::string& message) {
-    Server& server = Server::getInstance();   
+void SocialMessage::removeFriend(const std::string& message, int clientSocket) {
+    Server& server = Server::getInstance();
+    auto& clientsConnected = server.getClients();
+    PlayerHeader friendHeader;
+    memcpy(&friendHeader, message.c_str() + sizeof(SocialHeader),
+           sizeof(PlayerHeader));
+    std::string userNameStr(friendHeader.username);
+    std::string playerIDstr(std::to_string(friendHeader.idPlayer));
+
+    std::shared_ptr<Player> invitedPlayer = clientsConnected[clientSocket];
+    std::cout << invitedPlayer->username << " removed friend: " << userNameStr
+              << std::endl;
+    int invitedPlayerID = invitedPlayer->ID;
+    pqxx::connection* db = server.getDB();
+    pqxx::work txn(*db);
+    txn.exec_params(
+        "DELETE FROM friend_list WHERE (player_id = $1 AND "
+        "friend_id = $2) OR (player_id = $2 AND "
+        "friend_id = $1);",
+        playerIDstr, invitedPlayerID);
+    txn.commit();
+    std::cout << "Friend removed from database!" << std::endl;
+}
+
+void SocialMessage::saveMessageToDatabase(int senderId, int receiverId,
+                                          const std::string& message) {
+    Server& server = Server::getInstance();
     pqxx::connection* db = server.getDB();
     pqxx::work txn(*db);
 
     pqxx::result res = txn.exec_params(
-        "INSERT INTO chat_messages (sender_id, receiver_id, message) VALUES ($1, $2, $3)",
-        senderId, receiverId, message
-    );
+        "INSERT INTO chat_messages (sender_id, receiver_id, message) "
+        "VALUES "
+        "($1, $2, $3)",
+        senderId, receiverId, message);
 
     txn.commit();
     std::cout << "Message saved to database!" << std::endl;
 }
 
 void SocialMessage::sendMessages(const std::string& message, int clientSocket) {
-        Server& server = Server::getInstance();
-        auto& clientsConnected = server.getClients();
-        std::shared_ptr<Player>& sender = clientsConnected[clientSocket];
-        FriendHeader friendHeader;
-        memcpy(&friendHeader, message.c_str() + sizeof(SocialHeader), sizeof(FriendHeader));
-        std::string userNameStr(friendHeader.username);
-        std::cout << sender->username << " sent a message to " << userNameStr << " saying: " << friendHeader.message << std::endl;
-        for (const auto& [sock, player] : clientsConnected) {
-            std::cout << sender->receiver << " AND " << player->receiver << std::endl;
-            if ((player->username == friendHeader.username) && 
-            (player->receiver == sender->username) && (sender->receiver == player->username)) {
-              
-                if(player->isInChatRoom && sender->isInChatRoom) {
-                    std::string message = sender->username + " says: " + friendHeader.message;
-                    server.sendMessage(sock, message.c_str(), message.size());
-                } 
+    Server& server = Server::getInstance();
+    auto& clientsConnected = server.getClients();
+    std::shared_ptr<Player>& sender = clientsConnected[clientSocket];
+    PlayerHeader friendHeader;
+    memcpy(&friendHeader, message.c_str() + sizeof(SocialHeader),
+           sizeof(PlayerHeader));
+    std::string userNameStr(friendHeader.username);
+    std::cout << sender->username << " sent a message to " << userNameStr
+              << " saying: " << friendHeader.message << std::endl;
+
+    for (const auto& [sock, player] : clientsConnected) {
+        std::cout << sender->receiver << " AND " << player->receiver
+                  << std::endl;
+        if ((player->receiver == sender->username) &&
+            (sender->receiver == player->username)) {
+            if (player->isInChatRoom && sender->isInChatRoom) {
+                HeaderResponse header;
+                header.type = MESSAGE_TYPE::CHAT;
+                header.sizeMessage = sizeof(PlayerHeader);
+
+                PlayerHeader msgHeader;
+                strcpy(msgHeader.username, sender->username.c_str());
+                strcpy(msgHeader.message, friendHeader.message);
+                msgHeader.idPlayer = sender->ID;
+
+                char buffer[sizeof(HeaderResponse) + sizeof(PlayerHeader)];
+                memcpy(buffer, &header, sizeof(HeaderResponse));
+                memcpy(buffer + sizeof(HeaderResponse), &msgHeader,
+                       sizeof(PlayerHeader));
+
+                server.sendMessage(sock, buffer, sizeof(buffer));
+                std::cout << "Message sent to " << player->username
+                          << std::endl;
             }
         }
-        server.sendMessage(clientSocket, "Message sent", sizeof("Message sent"));
-        saveMessageToDatabase(sender->ID, friendHeader.idPlayer, friendHeader.message);
     }
 
-    std::vector<std::pair<int, std::string>> SocialMessage::loadMessageHistory(int player1Id, int player2Id) {
-        std::vector<std::pair<int, std::string>> messages;
-        Server& server = Server::getInstance();  
-        pqxx::connection* db = server.getDB();
-        pqxx::work txn(*db);
-            
-        pqxx::result res = txn.exec_params("SELECT * FROM chat_messages ORDER BY timestamp;");
+    HeaderResponse confirmHeader;
+    confirmHeader.type = MESSAGE_TYPE::CHAT;
+    confirmHeader.sizeMessage = sizeof(PlayerHeader);
 
-        for (const auto& row : res) {
-            int senderId = row[1].as<int>();
-            int receiverId = row[2].as<int>();
-            if((senderId == player1Id && receiverId == player2Id) || (senderId == player2Id && receiverId == player1Id)) {
-                std::string message = row[3].as<std::string>();
-                messages.push_back(std::make_pair(senderId, message));
-            }
+    PlayerHeader confirmMsg;
+    memset(&confirmMsg, 0, sizeof(PlayerHeader));
+    strcpy(confirmMsg.message, "Message sent");
+
+    char confirmBuffer[sizeof(HeaderResponse) + sizeof(PlayerHeader)];
+    memcpy(confirmBuffer, &confirmHeader, sizeof(HeaderResponse));
+    memcpy(confirmBuffer + sizeof(HeaderResponse), &confirmMsg,
+           sizeof(PlayerHeader));
+
+    server.sendMessage(clientSocket, confirmBuffer, sizeof(confirmBuffer));
+    saveMessageToDatabase(sender->ID, friendHeader.idPlayer,
+                          friendHeader.message);
+}
+
+std::vector<std::pair<int, std::string>> SocialMessage::loadMessageHistory(
+    int player1Id, int player2Id) {
+    std::vector<std::pair<int, std::string>> messages;
+    Server& server = Server::getInstance();
+    pqxx::connection* db = server.getDB();
+    pqxx::work txn(*db);
+
+    pqxx::result res =
+        txn.exec_params("SELECT * FROM chat_messages ORDER BY timestamp;");
+
+    for (const auto& row : res) {
+        int senderId = row[1].as<int>();
+        int receiverId = row[2].as<int>();
+        if ((senderId == player1Id && receiverId == player2Id) ||
+            (senderId == player2Id && receiverId == player1Id)) {
+            std::string message = row[3].as<std::string>();
+            messages.push_back(std::make_pair(senderId, message));
         }
-        txn.commit();
-        std::cout << "Message history loaded!" << std::endl;
-        return messages;
     }
-    
+    txn.commit();
+    std::cout << "Message history loaded!" << std::endl;
+    return messages;
+}
+
 void SocialMessage::getMessages(const std::string& message, int clientSocket) {
     Server& server = Server::getInstance();
     auto& clientsConnected = server.getClients();
     std::shared_ptr<Player> requester = clientsConnected[clientSocket];
     ChatHeader chatHeader;
-    FriendHeader friendHeader;
-    memcpy(&friendHeader, message.c_str() + sizeof(SocialHeader), sizeof(FriendHeader));
-    std::vector<std::pair<int, std::string>> messageHistory = loadMessageHistory(requester->ID, friendHeader.idPlayer);
+    PlayerHeader friendHeader;
+    memcpy(&friendHeader, message.c_str() + sizeof(SocialHeader),
+           sizeof(PlayerHeader));
+    std::vector<std::pair<int, std::string>> messageHistory =
+        loadMessageHistory(requester->ID, friendHeader.idPlayer);
 
-    char countbuffer[sizeof(int)];
+    HeaderResponse headerResponse;
+    headerResponse.type = MESSAGE_TYPE::CHAT;
+    headerResponse.sizeMessage = sizeof(int);
+
+    char countbuffer[sizeof(int) + sizeof(HeaderResponse)];
     memset(countbuffer, 0, sizeof(countbuffer));
-    int count = messageHistory.size();
-    memcpy(countbuffer, &count, sizeof(int));
-    server.sendMessage(clientSocket, countbuffer, sizeof(int));
+    memcpy(countbuffer, &headerResponse, sizeof(HeaderResponse));
 
-    for (int i = 0; i < messageHistory.size(); ++i) {
-        char buffer[sizeof(ChatHeader)];
+    int count = static_cast<int>(messageHistory.size());
+    memcpy(countbuffer + sizeof(HeaderResponse), &count, sizeof(int));
+    server.sendMessage(clientSocket, countbuffer,
+                       sizeof(int) + sizeof(HeaderResponse));
+
+    for (int i = 0; i < static_cast<int>(messageHistory.size()); ++i) {
+        HeaderResponse playerResponse;
+        playerResponse.type = MESSAGE_TYPE::CHAT;
+        playerResponse.sizeMessage = sizeof(ChatHeader);
+
+        char buffer[sizeof(ChatHeader) + sizeof(HeaderResponse)];
         memset(buffer, 0, sizeof(buffer));
+        memcpy(buffer, &playerResponse, sizeof(HeaderResponse));
         chatHeader.idPlayer = messageHistory[i].first;
         strcpy(chatHeader.username, friendHeader.username);
         strcpy(chatHeader.message, messageHistory[i].second.c_str());
-        memcpy(buffer, &chatHeader, sizeof(ChatHeader));
-        server.sendMessage(clientSocket, buffer, sizeof(ChatHeader));
+        memcpy(buffer + sizeof(HeaderResponse), &chatHeader,
+               sizeof(ChatHeader));
+        server.sendMessage(clientSocket, buffer,
+                           sizeof(ChatHeader) + sizeof(HeaderResponse));
     }
 }
 
@@ -964,19 +1285,84 @@ void SocialMessage::inChatRoom(const std::string& message, int clientSocket) {
     Server& server = Server::getInstance();
     auto& clientsConnected = server.getClients();
     std::shared_ptr<Player>& player = clientsConnected[clientSocket];
-    FriendHeader friendHeader;
-    memcpy(&friendHeader, message.c_str() + sizeof(SocialHeader), sizeof(FriendHeader));
+    PlayerHeader friendHeader;
+    memcpy(&friendHeader, message.c_str() + sizeof(SocialHeader),
+           sizeof(PlayerHeader));
     player->isInChatRoom = true;
     strcpy(player->receiver, friendHeader.receiver);
-    std::cout << player->username << " is in a chat room with " << player->receiver << std::endl; 
+    std::cout << player->username << " is in a chat room with "
+              << player->receiver << std::endl;
 }
 void SocialMessage::leaveChat(const std::string& message, int clientSocket) {
     Server& server = Server::getInstance();
     auto& clientsConnected = server.getClients();
     std::shared_ptr<Player>& player = clientsConnected[clientSocket];
     player->isInChatRoom = false;
-    FriendHeader friendHeader;
-    memcpy(&friendHeader, message.c_str() + sizeof(SocialHeader), sizeof(FriendHeader));
+    PlayerHeader friendHeader;
+    memcpy(&friendHeader, message.c_str() + sizeof(SocialHeader),
+           sizeof(PlayerHeader));
     strcpy(player->receiver, friendHeader.receiver);
-    std::cout << player->username << " left the chat room with " << friendHeader.username << std::endl; 
+    std::cout << player->username << " left the chat room with "
+              << friendHeader.username << std::endl;
+}
+
+void SocialMessage::getUsers(const std::string& /*message*/, int clientSocket) {
+    Server& server = Server::getInstance();
+    pqxx::connection* db = server.getDB();
+    pqxx::work txn(*db);
+    pqxx::result res =
+        txn.exec_params("SELECT * FROM score ORDER BY high_score DESC;");
+    pqxx::result countResult = txn.exec_params("SELECT COUNT(*) FROM score;");
+    std::cout << "User list requested" << std::endl;
+
+    HeaderResponse countHeaderResponse = {MESSAGE_TYPE::LEADERBOARD,
+                                          sizeof(int)};
+    char countbuffer[sizeof(int) + sizeof(HeaderResponse)];
+    memset(countbuffer, 0, sizeof(countbuffer));
+    memcpy(countbuffer, &countHeaderResponse, sizeof(HeaderResponse));
+    int count = countResult[0][0].as<int>();
+    memcpy(countbuffer + sizeof(HeaderResponse), &count, sizeof(int));
+    server.sendMessage(clientSocket, countbuffer,
+                       sizeof(int) + sizeof(HeaderResponse));
+
+    for (const auto& row : res) {
+        HeaderResponse headerResponse = {
+            MESSAGE_TYPE::LEADERBOARD,
+            sizeof(SocialHeader) + sizeof(PlayerHeader)};
+        char buffer[sizeof(PlayerHeader) + sizeof(HeaderResponse) +
+                    sizeof(SocialHeader)];
+        SocialHeader socialHeader;
+        socialHeader.type = SOCIAL_TYPE::GET_USERS;
+        PlayerHeader friendHeader;
+        std::string username = row[0].as<std::string>();
+        strcpy(friendHeader.username, username.c_str());
+        friendHeader.highScore = row[2].as<int>();
+        memset(buffer, 0, sizeof(buffer));
+        memcpy(buffer, &headerResponse, sizeof(HeaderResponse));
+        memcpy(buffer + sizeof(HeaderResponse), &socialHeader,
+               sizeof(SocialHeader));
+        memcpy(buffer + sizeof(HeaderResponse) + sizeof(SocialHeader),
+               &friendHeader, sizeof(PlayerHeader));
+        server.sendMessage(clientSocket, buffer,
+                           sizeof(PlayerHeader) + sizeof(HeaderResponse) +
+                               sizeof(SocialHeader));
+    }
+    txn.commit();
+}
+
+void SocialMessage::updateHighScore(const std::string& message,
+                                    int clientSocket) {
+    Server& server = Server::getInstance();
+    auto& clientsConnected = server.getClients();
+    std::shared_ptr<Player>& player = clientsConnected[clientSocket];
+    PlayerHeader you;
+    memcpy(&you, message.c_str() + sizeof(SocialHeader), sizeof(PlayerHeader));
+    std::cout << player->username << " updated high score to: " << you.highScore
+              << std::endl;
+    // player->gameState->points_ = you.highScore;
+    pqxx::connection* db = server.getDB();
+    pqxx::work txn(*db);
+    txn.exec_params("UPDATE score SET high_score = $1 WHERE username = $2;",
+                    you.highScore, player->username);
+    txn.commit();
 }

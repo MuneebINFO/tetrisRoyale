@@ -106,8 +106,7 @@ int Server::sendMessage(char* buffer, size_t size) {
                 return 1;
             }
         }
-        n += static_cast<size_t>(
-            result);  // Mise à jour du nombre total d'octets envoyés
+        n += static_cast<size_t>(result);
     }
 
     return 0;
@@ -166,10 +165,10 @@ void Server::disconnect() {
     }
 }
 
-void Server::handleSocialRequest(SOCIAL_TYPE type, FriendHeader friendHeader) {
+void Server::handleSocialRequest(SOCIAL_TYPE type, PlayerHeader friendHeader) {
     Header header;
     header.type = MESSAGE_TYPE::SOCIAL;
-    header.sizeMessage = sizeof(SocialHeader) + sizeof(FriendHeader);
+    header.sizeMessage = sizeof(SocialHeader) + sizeof(PlayerHeader);
 
     char buffer[BUFFER_SIZE];
     memset(buffer, 0, sizeof(buffer));
@@ -179,48 +178,8 @@ void Server::handleSocialRequest(SOCIAL_TYPE type, FriendHeader friendHeader) {
     socialHeader.type = type;
     memcpy(buffer + sizeof(Header), &socialHeader, sizeof(SocialHeader));
     memcpy(buffer + sizeof(Header) + sizeof(SocialHeader), &friendHeader,
-           sizeof(FriendHeader));
+           sizeof(PlayerHeader));
 
     sendMessage(buffer,
-                sizeof(Header) + sizeof(SocialHeader) + sizeof(FriendHeader));
-}
-
-std::vector<FriendHeader> Server::receiveFriendListHeader() {
-    std::vector<FriendHeader> friendList;
-
-    char bufferNul[sizeof(int)];
-    memset(bufferNul, 0, sizeof(bufferNul));
-    recv(socket_, bufferNul, sizeof(int), 0);
-
-    int count;
-    memcpy(&count, bufferNul, sizeof(int));
-
-    for (int i = 0; i < count; i++) {
-        char buffer[sizeof(FriendHeader)];
-        memset(buffer, 0, sizeof(buffer));
-        recv(socket_, buffer, sizeof(FriendHeader), 0);
-        FriendHeader header;
-        memcpy(&header, buffer, sizeof(FriendHeader));
-        friendList.push_back(header);
-    }
-    return friendList;
-}
-
-std::vector<ChatHeader> Server::receiveChatListHeader() {
-    std::vector<ChatHeader> friendList;
-
-    char buffer[sizeof(int)];
-    memset(buffer, 0, sizeof(buffer));
-    ssize_t bytesReceived = recv(socket_, buffer, sizeof(int), 0);
-    int count;
-    memcpy(&count, buffer, sizeof(int));
-    for (int i = 0; i < count; i++) {
-        char buffer[sizeof(ChatHeader)];
-        memset(buffer, 0, sizeof(buffer));
-        ssize_t bytesReceived = recv(socket_, buffer, sizeof(ChatHeader), 0);
-        ChatHeader header;
-        memcpy(&header, buffer, sizeof(ChatHeader));
-        friendList.push_back(header);
-    }
-    return friendList;
+                sizeof(Header) + sizeof(SocialHeader) + sizeof(PlayerHeader));
 }

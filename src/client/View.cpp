@@ -1,9 +1,11 @@
-
+#include <memory>
+#include <string>
 #define NCURSES_NOMACROS 1
 #include <ncursesw/curses.h>
 #include <ncursesw/menu.h>
 #include <sys/types.h>
 
+#include <algorithm>
 #include <sstream>
 
 #include "Game.h"
@@ -15,6 +17,33 @@
 
 void IView::setLobby(std::shared_ptr<Lobby> lobby) { lobby_ = lobby; }
 void IView::setPlayer(std::shared_ptr<Player> player) { player_ = player; }
+
+// change to vector
+std::vector<std::string> IView::getVectorGameMode() {
+    std::vector<std::string> gameMode;
+    for (int i = 0; i < MODE_NUMBERS; ++i) {
+        gameMode.push_back(GAME_MODE[i]);
+    }
+    return gameMode;
+}
+std::shared_ptr<Lobby> IView::getLobby() {
+    if (auto lobby = lobby_.lock()) {
+        return lobby;
+    }
+    return nullptr;
+}
+std::shared_ptr<Player> IView::getPlayer() {
+    if (auto player = player_.lock()) {
+        return player;
+    }
+    return nullptr;
+}
+std::shared_ptr<Server> IView::getServer() {
+    if (auto server = server_.lock()) {
+        return server;
+    }
+    return nullptr;
+}
 
 ViewCLI::ViewCLI() : IView{} {
     setupNcurses();
@@ -39,7 +68,7 @@ void ViewCLI::setupNcurses() {
         start_color();
         use_default_colors();
 
-        init_pair(1, COLOR_RED, COLOR_BLACK);
+        init_pair(1, COLOR_RED, COLOR_RED);
         init_pair(2, COLOR_GREEN, COLOR_GREEN);
         init_pair(3, COLOR_YELLOW, COLOR_YELLOW);
         init_pair(4, COLOR_BLUE, COLOR_BLUE);
@@ -48,6 +77,8 @@ void ViewCLI::setupNcurses() {
         init_pair(7, COLOR_WHITE, COLOR_WHITE);
         init_pair(8, COLOR_BLACK, -1);
         init_pair(9, COLOR_WHITE, COLOR_BLACK);
+        init_pair(10, COLOR_GREEN, COLOR_BLACK);
+        init_pair(50, COLOR_RED, COLOR_BLACK);
         init_pair(100, COLOR_RED, -1);
     } else {
         printw("Erreur : Terminal ne supporte pas les couleurs !\n");
@@ -59,7 +90,7 @@ void ViewCLI::setupNcurses() {
 }
 
 void ViewCLI::showEndScreen(bool won) {
-    clear(); // nettoie l'écran ncurses
+    clear();  // nettoie l'écran ncurses
     int centerY = LINES / 2;
     int centerX = COLS / 2 - 10;
 
@@ -71,19 +102,17 @@ void ViewCLI::showEndScreen(bool won) {
 
     mvprintw(centerY + 2, centerX - 5, "Press any key to exit...");
     refresh();
-    getch();  // attendre une touche
-    endwin();
 }
 
 void ViewCLI::showBoards(Game* game) {
-    std::uint16_t myId = static_cast<std::uint16_t>(game->getPlayer()->getPlayerId());
+    if (game->getIsSpectator()) clear();
+
+    int myId = static_cast<int>(game->getPlayer()->getPlayerId());
     auto boards = game->getBoards();
 
     int gridWidth = WIDTH + 4;
-    int startX = 2 + 2 * gridWidth;
+    int startX = game->getIsSpectator() ? 4 : 2 + 2 * gridWidth;
     int startY = 3;
-    int blocColor = 7;
-
     for (const auto& [playerID, grid] : boards) {
         if (playerID == myId) continue;
 
@@ -99,7 +128,7 @@ void ViewCLI::showBoards(Game* game) {
             if (!isEmpty) break;
         }
 
-        if (isEmpty) continue; // ne pas afficher les boards vides
+        if (isEmpty) continue;  // ne pas afficher les boards vides
 
         mvaddch(startY, startX, ACS_ULCORNER);
         for (int i = 0; i < WIDTH; ++i)
@@ -112,10 +141,10 @@ void ViewCLI::showBoards(Game* game) {
                 if (grid[i][j] == 0) {
                     mvprintw(startY + 1 + i, startX + 1 + j, "  ");
                 } else {
-                    attron(COLOR_PAIR(blocColor));
+                    attron(COLOR_PAIR(grid[i][j]));
                     mvaddch(startY + 1 + i, startX + 1 + j, ACS_BLOCK);
                     mvaddch(startY + 1 + i, startX + 1 + j + 1, ACS_BLOCK);
-                    attroff(COLOR_PAIR(blocColor));
+                    attroff(COLOR_PAIR(grid[i][j]));
                 }
             }
             mvaddch(startY + 1 + i, startX + WIDTH + 1, ACS_VLINE);
@@ -126,9 +155,11 @@ void ViewCLI::showBoards(Game* game) {
             mvaddch(startY + HEIGHT + 1, startX + 1 + i, ACS_HLINE);
         mvaddch(startY + HEIGHT + 1, startX + WIDTH + 1, ACS_LRCORNER);
 
-        mvprintw(startY - 2, startX, "Player %d", playerID);
+        std::string username = game->getPlayerName(playerID);
+        mvprintw(startY - 2, startX, "%s", username.c_str());
         startX += gridWidth;
     }
+    if (game->getIsSpectator()) refresh();
 }
 
 void ViewCLI::showGame(Game* game) {
@@ -150,43 +181,61 @@ void ViewCLI::showGame(Game* game) {
             }
         }
     }
+
     int marginX = 3;
     int marginY = 4;
     curs_set(0);
     mvprintw(1, marginX, "Points: %d", game->getPoints());
-    // Bordure supérieure
-    mvaddch(marginY - 1, 2, ACS_ULCORNER);
-    for (int i = 0; i < 2 * WIDTH; ++i) mvaddch(marginX, 3 + i, ACS_HLINE);
-    mvaddch(marginY - 1, marginX + 2 * WIDTH, ACS_URCORNER);
+    if (game->getGameMode() == "Tetris Royal") {
+        mvprintw(2, marginX, "Energy: %d", game->getEnergy());
+        showMalus(game);
+    }
 
-    // Affichage de la grille
-    for (int i = 0; i < HEIGHT; ++i) {
-        mvaddch(marginY + i, 2, ACS_VLINE);
-        for (int j = 0; j < WIDTH; ++j) {
-            if (grid[i][j] == 0) {
+    if (!game->isBlackScreen()) {
+        // Bordure supérieure
+        mvaddch(marginY - 1, 2, ACS_ULCORNER);
+        for (int i = 0; i < 2 * WIDTH; ++i)
+            mvaddch(marginY - 1, 3 + i, ACS_HLINE);
+        mvaddch(marginY - 1, marginX + 2 * WIDTH, ACS_URCORNER);
+
+        // Affichage de la grille
+        for (int i = 0; i < HEIGHT; ++i) {
+            mvaddch(marginY + i, 2, ACS_VLINE);
+            for (int j = 0; j < WIDTH; ++j) {
+                if (grid[i][j] == 0) {
+                    mvprintw(marginY + i, marginX + 2 * j, "  ");
+                } else {
+                    attron(COLOR_PAIR(grid[i][j]));
+                    mvaddch(marginY + i, marginX + 2 * j, ACS_BLOCK);
+                    mvaddch(marginY + i, marginX + 2 * j + 1, ACS_BLOCK);
+                    attroff(COLOR_PAIR(grid[i][j]));
+                }
+            }
+            mvaddch(marginY + i, marginX + 2 * WIDTH, ACS_VLINE);
+        }
+
+        // Bordure inférieure
+        mvaddch(marginY + HEIGHT, 2, ACS_LLCORNER);
+        for (int i = 0; i < 2 * WIDTH; ++i)
+            mvaddch(marginY + HEIGHT, marginX + i, ACS_HLINE);
+        mvaddch(marginY + HEIGHT, marginX + 2 * WIDTH, ACS_LRCORNER);
+
+    } else {
+        // Effacer la grille
+        for (int i = 0; i < HEIGHT; ++i) {
+            for (int j = 0; j < WIDTH; ++j) {
                 mvprintw(marginY + i, marginX + 2 * j, "  ");
-            } else {
-                attron(COLOR_PAIR(grid[i][j]));
-                mvaddch(marginY + i, marginX + 2 * j, ACS_BLOCK);
-                mvaddch(marginY + i, marginX + 2 * j + 1, ACS_BLOCK);
-                attroff(COLOR_PAIR(grid[i][j]));
             }
         }
-        mvaddch(marginY + i, marginX + 2 * WIDTH, ACS_VLINE);
     }
-    // Bordure inférieure
-    mvaddch(marginY + HEIGHT, 2, ACS_LLCORNER);
-    for (int i = 0; i < 2 * WIDTH; ++i)
-        mvaddch(marginY + HEIGHT, marginX + i, ACS_HLINE);
-    mvaddch(marginY + HEIGHT, marginX + 2 * WIDTH, ACS_LRCORNER);
     showBoards(game);
     refresh();
     // wnoutrefresh(stdscr);
     // doupdate();
 }
 
-// ASK: What do we think about this one ?
-int ViewCLI::showMenuInviteFriendToParty(std::vector<FriendHeader> friends) {
+// show the menu for inviting a friend to the party
+int ViewCLI::showMenuInviteFriendToParty(std::vector<PlayerHeader> friends) {
     Signal& signal = Signal::getInstance();
     ITEM** my_items;
     WINDOW* newWin = getWinMenu();
@@ -252,10 +301,12 @@ int ViewCLI::showMenuInviteFriendToParty(std::vector<FriendHeader> friends) {
     for (int i = 0; i < n_choices; ++i) {
         free_item(my_items[i]);
     }
+    free(my_items);
     clear();
     return idx;
 }
 
+// show a menu to choose if the player invited is a gamer or not
 void ViewCLI::showOptionInviteFriend(LobbyInviteFriend& lobbyFriend) {
     Signal& signal = Signal::getInstance();
     ITEM** my_items;
@@ -285,7 +336,9 @@ void ViewCLI::showOptionInviteFriend(LobbyInviteFriend& lobbyFriend) {
     set_menu_mark(my_menu, " * ");
     post_menu(my_menu);
     refresh();
-    while ((c = wgetch(newWin)) and c >= 0 and signal.getSigIntFlag() == 0) {
+    int end = 0;
+    while (end >= 0 and (c = wgetch(newWin)) and c >= 0 and
+           signal.getSigIntFlag() == 0) {
         switch (c) {
             case 'b':
                 menu_driver(my_menu, REQ_DOWN_ITEM);
@@ -301,18 +354,19 @@ void ViewCLI::showOptionInviteFriend(LobbyInviteFriend& lobbyFriend) {
                 } else {
                     lobbyFriend.asGamer = false;
                 }
-                unpost_menu(my_menu);
-                free_menu(my_menu);
-                for (int i = 0; i < n_choices; ++i) {
-                    free_item(my_items[i]);
-                }
-                return;
+                end = -1;
                 break;
             }
             default:
                 break;
         }
     }
+    unpost_menu(my_menu);
+    free_menu(my_menu);
+    for (int i = 0; i < n_choices; ++i) {
+        free_item(my_items[i]);
+    }
+    free(my_items);
 }
 
 ACCOUNT_STATE ViewCLI::showAccountConnection() {
@@ -407,28 +461,15 @@ void ViewCLI::showMenu(MENU_STATE menu) {
     }
 }
 
-void ViewCLI::showMenuLobby() {
-    WINDOW* newWin = getWinMenu();
-    basicMenuConfig();
-    int ymax, xmax;
-    getmaxyx(stdscr, ymax, xmax);
-    mvwprintw(newWin, 0, 2, "LOBBY");
-    mvwprintw(newWin, 1, 2, "Number of players : ");
-    mvwprintw(newWin, 12, 2, "Game mode : ");
-    int messageY = ymax - 5;  // Afficher les messages près du bas de l'écran
-    mvprintw(messageY, 0, "Press a to choose the number of players");
-    mvprintw(messageY + 1, 0, "Press b to choose game mode");
-    mvprintw(messageY + 2, 0, "Press space to create the game");
-    mvprintw(messageY + 3, 0, "Press Esc to return to Main Menu");
-    refreshScreen();
-}
+void ViewCLI::showMenuLobby() { showLobbyModify(); }
 
+// Show the menu to change the settings of the lobby
 void ViewCLI::showLobbyModify() {
     int c;
     int idx = 0, base = 3, nChoices;
     WINDOW* win = getWinMenu();
     std::shared_ptr<Lobby> lobby = getLobby();
-    std::vector<std::string> gameMode = {"Endless", "Dual", "Classic"};
+    std::vector<std::string> gameMode = IView::getVectorGameMode();
 
     basicMenuConfig();
     int ymax, xmax;
@@ -444,18 +485,19 @@ void ViewCLI::showLobbyModify() {
     }
     nChoices = int(gameMode.size());
 
-    wattron(win, COLOR_PAIR(1));
+    wattron(win, COLOR_PAIR(50));
     mvwprintw(win, idx + base, base, "%s", gameMode[idx].c_str());
-    wattroff(win, COLOR_PAIR(1));
+    wattroff(win, COLOR_PAIR(50));
     refresh();
+    lobby->setIsSetup(false);
     while ((c = wgetch(win)) >= 0) {
         switch (c) {
             case 'B':
             case 'b':
                 idx = (idx + 1) % nChoices;
-                wattron(win, COLOR_PAIR(1));
+                wattron(win, COLOR_PAIR(50));
                 mvwprintw(win, idx + base, base, "%s", gameMode[idx].c_str());
-                wattroff(win, COLOR_PAIR(1));
+                wattroff(win, COLOR_PAIR(50));
                 mvwprintw(
                     win, (((idx - 1) % nChoices + nChoices) % nChoices) + base,
                     base, "%s",
@@ -464,21 +506,26 @@ void ViewCLI::showLobbyModify() {
                 break;
             case ENTER:
                 lobby->setGameMode(gameMode[idx]);
+                lobby->setIsSetup(true);
                 if (idx == 0) {
                     lobby->setNumberOfPlayer(1);
                 } else if (idx == 1) {
                     lobby->setNumberOfPlayer(2);
                 } else {
+                    lobby->setIsSetup(false);
                     handleChoiceNumber();
                 }
+
             case ESCAPE:
-            default:
                 return;
+            default:
+                break;
         }
         wrefresh(win);
     }
 }
 
+// Handle the choice of the number of players in the lobby
 void ViewCLI::handleChoiceNumber() {
     WINDOW* win = getWinMenu();
     int base = 3, c, i = 0, ip = 0, nChoices = MAX_PLAYERS_NUMBERS - 2;
@@ -487,9 +534,9 @@ void ViewCLI::handleChoiceNumber() {
     for (int j = 0; j < MAX_PLAYERS_NUMBERS - 2; j++) {
         mvwprintw(win, base + j, 20, "%i", j + 3);
     }
-    wattron(win, COLOR_PAIR(1));
+    wattron(win, COLOR_PAIR(50));
     mvwprintw(win, base, 20, "%i", 3);
-    wattroff(win, COLOR_PAIR(1));
+    wattroff(win, COLOR_PAIR(50));
     refresh();
     while ((c = wgetch(win)) >= 0) {
         switch (c) {
@@ -497,14 +544,15 @@ void ViewCLI::handleChoiceNumber() {
             case 'b':
                 i = (i + 1) % nChoices;
                 ip = ((i - 1) % nChoices + nChoices) % nChoices;
-                wattron(win, COLOR_PAIR(1));
+                wattron(win, COLOR_PAIR(50));
                 mvwprintw(win, i + base, 20, "%i", i + 3);
-                wattroff(win, COLOR_PAIR(1));
+                wattroff(win, COLOR_PAIR(50));
                 mvwprintw(win, ip + base, 20, "%i", ip + 3);
                 break;
             case ENTER:
-            case ESCAPE:
                 lobby->setNumberOfPlayer(i + 3);
+                lobby->setIsSetup(true);
+            case ESCAPE:
                 return;
             default:
                 break;
@@ -584,58 +632,7 @@ void ViewCLI::showMainMenu() {
     refreshScreen();
 }
 
-void ViewCLI::showInvitationMenu(std::shared_ptr<Player> player_) {
-    WINDOW* newWin = getWinMenu();
-    int ymax, xmax;
-    getmaxyx(stdscr, ymax, xmax);
-    basicMenuConfig();
-    mvwprintw(newWin, 0, 2, "Invitation MENU");
-
-    InvitationManager invitationManager(player_);
-    FriendHeader player;
-    player.idPlayer = player_->getPlayerId();
-    strcpy(player.username, player_->getName().c_str());
-    invitationManager.refreshInvitationsList(getServer(), player);
-
-    for (int i = 0; i < int(player_->getVectorInvitations().size()); i++) {
-        int invitingPlayerID = player_->getVectorInvitations()[i].idPlayer;
-        char invitingPlayerName[MAX_NAME_LENGTH];
-        strcpy(invitingPlayerName, player_->getVectorInvitations()[i].username);
-        mvwprintw(newWin, 1 + i, 1, "Invitation from : %s with ID %d",
-                  invitingPlayerName, invitingPlayerID);
-    }
-    int messageY = ymax - 5;  // Afficher les messages près du bas de l'écran
-    mvprintw(messageY, 0, "Press a to choose an invitation");
-    mvprintw(messageY + 1, 0, "Press r to refresh the list");
-    mvprintw(messageY + 2, 0, "Press Enter to accept the invitation");
-    mvprintw(messageY + 3, 0, "Press Esc to return to Main Menu");
-    refreshScreen();
-}
-
-void ViewCLI::showInvitationList(std::vector<FriendHeader> invitations,
-                                 int& idx) {
-    WINDOW* newWin = getWinMenu();
-    mvwprintw(newWin, 0, 2, "Invitation MENU");
-    if (invitations.size() > 0) {
-        for (int i = 0; i < invitations.size(); i++) {
-            if (i == idx) {
-                wattron(newWin, COLOR_PAIR(1));
-                mvwprintw(newWin, 1 + i, 1, "Invitation from : %s with ID %i",
-                          invitations[i].username, invitations[i].idPlayer);
-                wattroff(newWin, COLOR_PAIR(1));
-            } else {
-                mvwprintw(newWin, 1 + i, 1, "Invitation from : %s with ID %i",
-                          invitations[i].username, invitations[i].idPlayer);
-            }
-        }
-    } else {
-        mvprintw(
-            0, 1,
-            "Cannot select an invitation, no invitation received sadge :(");
-    }
-    refreshScreen();
-}
-
+// show the menu with the game invitations
 int ViewCLI::showGameInvitationMenu(std::vector<LobbyInvitation> invitations) {
     WINDOW* newWin = getWinMenu();
     ITEM** my_items;
@@ -706,14 +703,15 @@ int ViewCLI::showGameInvitationMenu(std::vector<LobbyInvitation> invitations) {
                 done = true;
                 break;
             default:
+
                 break;
         }
         wrefresh(newWin);
     }
-
     unpost_menu(my_menu);
     free_menu(my_menu);
-    for (int i = 0; i < nChoices + 1; ++i) {
+
+    for (int i = 0; i < nChoices; ++i) {
         free_item(my_items[i]);
         delete[] toShow[i];
     }
@@ -737,94 +735,66 @@ void ViewCLI::showNoGameInvitation() {
     }
 }
 
-void ViewCLI::showFriendList(std::vector<FriendHeader> friendsList, int& idx) {
-    WINDOW* newWin = getWinMenu();
-    mvwprintw(newWin, 0, 2, "PROFILE MENU");
-
-    if (int(friendsList.size()) > 0) {
-        for (int i = 0; i < int(friendsList.size()); i++) {
-            if (i == idx) {
-                wattron(newWin, COLOR_PAIR(1));
-                mvwprintw(newWin, 3 + i, 2, "%s with ID %i",
-                          friendsList[i].username, friendsList[i].idPlayer);
-                wattroff(newWin, COLOR_PAIR(1));
-            } else {
-                mvwprintw(newWin, 3 + i, 2, "%s with ID %i",
-                          friendsList[i].username, friendsList[i].idPlayer);
-            }
-        }
-    } else {
-        mvprintw(0, 1, "Cannot select a friend, no friends found sadge :(");
-    }
-    refreshScreen();
-}
-
 void ViewCLI::showRankingMenu() {
-    WINDOW* newWin = getWinMenu();
+    clearScreen();
+
     int ymax, xmax;
     getmaxyx(stdscr, ymax, xmax);
-    basicMenuConfig();
-    mvwprintw(newWin, 0, 2, "RANKING MENU");
-    int messageY = ymax - 5;  // Afficher les messages près du bas de l'écran
-    mvprintw(messageY, 0, "Press Esc to return to Main Menu");
+    int centerX = xmax / 2;
 
-    refreshScreen();
+    int boxWidth = 29;
+    int startY = 2;
+    int startX = centerX - boxWidth / 2;
+
+    attron(A_BOLD);
+
+    mvaddch(startY, startX, ACS_ULCORNER);
+    for (int i = 1; i < boxWidth - 1; ++i)
+        mvaddch(startY, startX + i, ACS_HLINE);
+    mvaddch(startY,     startX + boxWidth - 1, ACS_URCORNER);
+
+    mvaddch(startY + 1, startX, ACS_VLINE);
+    mvprintw(startY + 1, startX + (boxWidth - 11) / 2, "LEADERBOARD");
+    mvaddch(startY + 1, startX + boxWidth - 1, ACS_VLINE);
+
+    mvaddch(startY + 2, startX, ACS_LLCORNER);
+    for (int i = 1; i < boxWidth - 1; ++i)
+        mvaddch(startY + 2, startX + i, ACS_HLINE);
+    mvaddch(startY + 2, startX + boxWidth - 1, ACS_LRCORNER);
+
+    attroff(A_BOLD);
+
+    std::shared_ptr<Server> server = getServer();
+    std::shared_ptr<Player> player_ = getPlayer();
+    showPlayerWithHightScore(player_, server);
+
+    mvprintw(ymax - 5, 0, "Press Esc to return to Main Menu");
+    refresh();
 }
 
-void ViewCLI::showProfileMenu(std::shared_ptr<Player> player) {
-    basicMenuConfig();
-    WINDOW* win = getWinMenu();
-    mvwprintw(win, 0, 2, "PROFILE MENU");
-    mvwprintw(win, 2, 2, "Friends:");
-    int ymax, xmax;
-    getmaxyx(stdscr, ymax, xmax);
 
-    mvprintw(0, 1, "                                                   ");
-    switch (friendRequestStatus_) {
-        case FriendRequestStatus::FRIEND_REQUEST_SENT:
-            mvprintw(0, 1, "Friend request sent to %s!",
-                     targetPlayerName_.c_str());
-            break;
-        case FriendRequestStatus::ALREADY_IN_LIST:
-            mvprintw(0, 1, "Player already in the list!");
-            break;
-        case FriendRequestStatus::SELF_ADD_FORBIDDEN:
-            mvprintw(0, 1, "You cannot add yourself as a friend!");
-            break;
-        case FriendRequestStatus::PLAYER_NOT_FOUND:
-            mvprintw(0, 1, "%s not found!", targetPlayerName_.c_str());
-            break;
-        case FriendRequestStatus::NO_FRIENDS:
-            mvprintw(0, 1, "No friends found!");
-            break;
-        case FriendRequestStatus::FRIEND_REQUEST_ALREADY_SENT:
-            mvprintw(0, 1, "Friend request already sent to %s!",
-                     targetPlayerName_.c_str());
-            break;
-        default:
-            break;
+void ViewCLI::showPlayerWithHightScore(std::shared_ptr<Player> player_,
+                                       std::shared_ptr<Server> server) {
+    int xmax = getmaxx(stdscr);
+    int centerX = xmax / 2;
+    PlayerHeader player;
+    Social social;
+
+    strcpy(player.username, player_->getName().c_str());
+    std::vector<PlayerHeader> players = social.getUsers(server, player);
+    
+    mvprintw(7, centerX - 15, "USERNAME");
+    mvprintw(7, centerX + 5, "HIGH SCORE");
+
+    for (int i = centerX - 15; i < centerX + 15; ++i)
+        mvaddch(8, i, ACS_HLINE);
+
+    for (int i = 0; i < int(players.size()); i++) {
+        mvprintw(9 + i, centerX - 15, "%s", players[i].username);
+        mvprintw(9 + i, centerX + 5, "%d", players[i].highScore);
     }
-
-    const char* msg = "Always refresh the list before adding a friend";
-    int centerX = (xmax - static_cast<int>(strlen(msg))) / 2;
-    mvprintw(8, centerX, "%s", msg);
-
-    for (int i = 0; i < int(player->getVectorFriends().size()); i++) {
-        std::string friendName = player->getVectorFriends()[i].username;
-        int friendID = player->getVectorFriends()[i].idPlayer;
-        mvwprintw(win, 3 + i, 2, "%s with ID %i", friendName.c_str(), friendID);
-    }
-
-    mvwprintw(win, 15, 2, "Add a friend");
-    mvwprintw(win, 16, 2, "Remove a friend");
-
-    int messageY = ymax - 5;  // Afficher les messages près du bas de l'écran
-    mvprintw(messageY, 0, "Press a to add a friend");
-    mvprintw(messageY + 1, 0, "Press b to remove a friend");
-    mvprintw(messageY + 2, 0, "Press Esc to return to Main Menu");
-
-    refreshScreen();
 }
+
 void ViewCLI::showPlayMenu() {
     WINDOW* newWin = getWinMenu();
     basicMenuConfig();
@@ -858,9 +828,9 @@ void ViewCLI::showChoiceNumber(int& selectedItem_1, int& selectedItem_2) {
     clearChoiceMode();
     for (int i = 0; i < MAX_PLAYERS_NUMBERS - 2; i++) {
         if (i == selectedItem_1) {
-            wattron(newWin, COLOR_PAIR(1));
+            wattron(newWin, COLOR_PAIR(50));
             mvwprintw(newWin, 1 + (i + 1), 2, "%i", i + 3);
-            wattroff(newWin, COLOR_PAIR(1));
+            wattroff(newWin, COLOR_PAIR(50));
         } else {
             mvwprintw(newWin, 1 + (i + 1), 2, "%i", i + 3);
         }
@@ -877,9 +847,9 @@ void ViewCLI::showChoiceMode(int& selectedItem_2) {
     clearChoiceNumber();
     for (int i = 0; i < MODE_NUMBERS; i++) {
         if (i == selectedItem_2) {
-            wattron(newWin, COLOR_PAIR(1));
+            wattron(newWin, COLOR_PAIR(50));
             mvwprintw(newWin, 12 + (i + 1), 2, "%s", GAME_MODE[i]);
-            wattroff(newWin, COLOR_PAIR(1));
+            wattroff(newWin, COLOR_PAIR(50));
         } else {
             mvwprintw(newWin, 12 + (i + 1), 2, "%s", GAME_MODE[i]);
         }
@@ -938,24 +908,65 @@ void ViewCLI::showCreatingMenu() {
 
 void ViewCLI::showChatRoom() {
     clearScreen();
-    FriendHeader friendSelected = getPlayer()->getFriendSelected();
+    int max_y, max_x;
+    getmaxyx(stdscr, max_y, max_x);
+    int bottomLine = max_y - 1;
+    PlayerHeader friendSelected = getPlayer()->getFriendSelected();
     mvprintw(0, 0, "Chat Room with %s (ESC to exit, Enter to send)",
              friendSelected.username);
-    std::shared_ptr<Server> server = getServer();
-    server->handleSocialRequest(SOCIAL_TYPE::GET_MESSAGE, friendSelected);
-    std::vector<ChatHeader> messages = server->receiveChatListHeader();
+    showHistoryChat(friendSelected);
 
-    for (int i = 0; i < int(messages.size()); i++) {
-        if (messages[i].idPlayer == getPlayer()->getPlayerId()) {
-            mvprintw(1 + i, 1, "You: %s", messages[i].message);
-        } else {
-            mvprintw(1 + i, 50, "%s says: %s", messages[i].username,
-                     messages[i].message);
-        }
-    }
-    getPlayer()->setLine(1 + int(messages.size()));
+    cbreak();
+    noecho();
+    keypad(stdscr, TRUE);
+    curs_set(1);
+    mvprintw(bottomLine, 1, "%s", PROMPT_TEXT);
+
     refreshScreen();
 }
+
+void ViewCLI::showHistoryChat(PlayerHeader friendSelected) {
+    ChatModel message;
+    std::shared_ptr<Server> server = getServer();
+    server->handleSocialRequest(SOCIAL_TYPE::GET_MESSAGE, friendSelected);
+    std::vector<ChatHeader> chatList = message.getMessages(server);
+
+    for (int i = 0; i < int(chatList.size()); i++) {
+        if (chatList[i].idPlayer == getPlayer()->getPlayerId()) {
+            mvprintw(1 + i, 1, "You: %s", chatList[i].message);
+        } else {
+            mvprintw(1 + i, 50, "%s says: %s", chatList[i].username,
+                     chatList[i].message);
+        }
+    }
+    getPlayer()->setLine(1 + int(chatList.size()));
+}
+
+void ViewCLI::refreshChatView(int line, std::string buffer) {
+    int bottomLine = getmaxy(stdscr) - 1;
+
+    move(bottomLine, 1);
+    clrtoeol();
+    mvprintw(bottomLine, 1, "%s", PROMPT_TEXT);
+
+    move(line, 1);
+    clrtoeol();
+    mvprintw(line, 1, "You: %s", buffer.c_str());
+    refresh();
+}
+
+void ViewCLI::renderChatPrompt(int pos, char ch) {
+    int bottomLine = getmaxy(stdscr) - 1;
+    move(bottomLine, 1 + promptLength + pos);
+    mvaddch(bottomLine, 1 + promptLength + pos, ch);
+}
+
+void ViewCLI::handleBackSpace(int pos, char ch) {
+    int bottomLine = getmaxy(stdscr) - 1;
+    mvaddch(bottomLine, 1 + promptLength + pos, ch);
+    move(bottomLine, 1 + promptLength + pos);
+}
+
 void ViewCLI::updateLobbyView(std::shared_ptr<Lobby> lobby) {
     WINDOW* newWin = getWinMenu();
     mvwprintw(newWin, 0, 2, "LOBBY");
@@ -999,4 +1010,206 @@ void ViewCLI::basicMenuConfig() {
     noecho();
     curs_set(0);
     box(winMenu_, 0, 0);
+}
+
+int ViewCLI::showMalusType() {
+    int c;
+    int idx = 0, base = 3;
+    WINDOW* win = getWinMenu();
+
+    std::vector<std::string> malusOptions = {"Commandes bloqués",
+                                             "Inversion Commandes",
+                                             "Accélération", "Ecran Noir"};
+    std::vector<int> malusValues = {2, 3, 4, 5};
+
+    basicMenuConfig();
+
+    for (int i = 0; i < int(malusOptions.size()); i++) {
+        mvwprintw(win, base + i, base, "%s", malusOptions[i].c_str());
+    }
+    wrefresh(win);
+
+    keypad(win, true);
+    nodelay(win, false);
+
+    wattron(win, COLOR_PAIR(50));
+    mvwprintw(win, base + idx, base, "%s", malusOptions[idx].c_str());
+    wattroff(win, COLOR_PAIR(50));
+    wrefresh(win);
+
+    while (true) {
+        c = wgetch(win);
+        switch (c) {
+            case 'b':
+            case 'B':
+            case KEY_DOWN:
+                mvwprintw(win, base + idx, base, "%s",
+                          malusOptions[idx].c_str());
+                idx = (idx + 1) % malusOptions.size();
+                wattron(win, COLOR_PAIR(50));
+                mvwprintw(win, base + idx, base, "%s",
+                          malusOptions[idx].c_str());
+                wattroff(win, COLOR_PAIR(50));
+                break;
+
+            case '\n':
+            case '\r':
+            case KEY_ENTER:
+                clear();
+                return malusValues[idx];
+
+            default:
+                break;
+        }
+        wrefresh(win);
+    }
+
+    clear();
+    return -1;
+}
+
+int ViewCLI::showMalusTarget(Game* game_) {
+    int c;
+    int idx = 0, base = 3;
+    WINDOW* win = getWinMenu();
+
+    auto boards = game_->getBoards();
+    int myID = game_->getPlayer()->getPlayerId();
+
+    std::vector<int> targetIds;
+    for (const auto& [playerID, _] : boards) {
+        if (playerID != myID && playerID > 7) {
+            targetIds.push_back(playerID);
+        }
+    }
+
+    if (targetIds.empty()) {
+        return -1;
+    }
+
+    basicMenuConfig();
+
+    for (int i = 0; i < int(targetIds.size()); i++) {
+        std::string username = game_->getPlayerName(targetIds[i]);
+        mvwprintw(win, base + i, base, "Joueur : %s", username.c_str());
+    }
+    wrefresh(win);
+
+    keypad(win, true);
+    nodelay(win, false);
+    flushinp();
+
+    wattron(win, COLOR_PAIR(50));
+    std::string username = game_->getPlayerName(targetIds[idx]);
+    mvwprintw(win, base + idx, base, "Joueur : %s", username.c_str());
+    wattroff(win, COLOR_PAIR(50));
+    wrefresh(win);
+
+    while (true) {
+        c = wgetch(win);
+        switch (c) {
+            case 'b':
+            case 'B':
+            case KEY_DOWN: {
+                std::string oldName = game_->getPlayerName(targetIds[idx]);
+                mvwprintw(win, base + idx, base, "Joueur : %s",
+                          oldName.c_str());
+
+                idx = (idx + 1) % targetIds.size();
+
+                wattron(win, COLOR_PAIR(50));
+                std::string newName = game_->getPlayerName(targetIds[idx]);
+                mvwprintw(win, base + idx, base, "Joueur : %s",
+                          newName.c_str());
+                wattroff(win, COLOR_PAIR(50));
+                break;
+            }
+
+            case '\n':
+            case '\r':
+            case KEY_ENTER:
+                clear();
+                return targetIds[idx];
+
+            default:
+                break;
+        }
+        wrefresh(win);
+    }
+
+    clear();
+    return -1;
+}
+
+int ViewCLI::showBonusType() {
+    int c;
+    int idx = 0, base = 3;
+    WINDOW* win = getWinMenu();
+
+    std::vector<std::string> bonusOptions = {"Lotterie", "Ralentissement",
+                                             "Tetramino 1x1"};
+    std::vector<int> bonusValues = {1, 2, 3};
+
+    basicMenuConfig();
+
+    for (int i = 0; i < int(bonusOptions.size()); i++) {
+        mvwprintw(win, base + i, base, "%s", bonusOptions[i].c_str());
+    }
+    wrefresh(win);
+
+    keypad(win, true);
+    nodelay(win, false);
+
+    wattron(win, COLOR_PAIR(10));
+    mvwprintw(win, base + idx, base, "%s", bonusOptions[idx].c_str());
+    wattroff(win, COLOR_PAIR(10));
+    wrefresh(win);
+
+    while (true) {
+        c = wgetch(win);
+        switch (c) {
+            case 'b':
+            case 'B':
+            case KEY_DOWN:
+                mvwprintw(win, base + idx, base, "%s",
+                          bonusOptions[idx].c_str());
+                idx = (idx + 1) % bonusOptions.size();
+                wattron(win, COLOR_PAIR(10));
+                mvwprintw(win, base + idx, base, "%s",
+                          bonusOptions[idx].c_str());
+                wattroff(win, COLOR_PAIR(10));
+                break;
+
+            case '\n':
+            case '\r':
+            case KEY_ENTER:
+                clear();
+                return bonusValues[idx];
+
+            default:
+                break;
+        }
+        wrefresh(win);
+    }
+
+    clear();
+    return -1;
+}
+
+void ViewCLI::showMalus(Game* game) {
+    std::vector<std::string> malusList = game->getActiveMalus();
+
+    int marginX = 3;
+    int marginY = 4;
+    int messageY = marginY + HEIGHT + 2;
+
+    int linesToClear = 5;  // vu qu'il n'y a que max 5 malus
+    for (int i = 0; i < linesToClear; ++i) {
+        move(messageY + i, 0);
+        clrtoeol();
+    }
+
+    for (const auto& malus : malusList) {
+        mvprintw(messageY++, marginX, "Malus: %s", malus.c_str());
+    }
 }
