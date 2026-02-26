@@ -80,6 +80,19 @@ ControllerCLI::~ControllerCLI() {
     // pthread_mutex_destroy(&chatMutex);
 }
 
+void ControllerCLI::pushChatUiEvent_(ChatUiEvent ev) {
+    std::lock_guard<std::mutex> lock(chatQueueMtx_);
+    chatQueue_.push(std::move(ev));
+}
+
+bool ControllerCLI::popChatUiEvent_(ChatUiEvent& out) {
+    std::lock_guard<std::mutex> lock(chatQueueMtx_);
+    if (chatQueue_.empty()) return false;
+    out = std::move(chatQueue_.front());
+    chatQueue_.pop();
+    return true;
+}
+
 // capture input for the game. Creating a thread
 void ControllerCLI::captureInput(Game* game) {
     data_->toControl = static_cast<void*>(game);
@@ -417,48 +430,30 @@ void* ControllerCLI::receiveMessages(void* arg) {
     ChatThreadArgs* args = static_cast<ChatThreadArgs*>(arg);
     ControllerCLI* controller = static_cast<ControllerCLI*>(args->controller);
     std::shared_ptr<Server> server = controller->getServer();
-    std::shared_ptr<Player> player = args->player;
 
-    int bottomLine = getmaxy(stdscr) - 1;
     char buffer[sizeof(HeaderResponse) + sizeof(PlayerHeader)];
 
-    while (true) {
+    while (controller->chatThreadActive) {
         int bytesRead = server->receiveMessage(buffer);
+        if (bytesRead <= 0) continue;
 
-        if (bytesRead > 0) {
-            HeaderResponse header;
-            memcpy(&header, buffer, sizeof(HeaderResponse));
+        HeaderResponse header;
+        memcpy(&header, buffer, sizeof(HeaderResponse));
 
-            int line = args->player->getLine();
-            pthread_mutex_lock(&controller->chatMutex);
+        if (header.type != MESSAGE_TYPE::CHAT) continue;
 
-            if (header.type == MESSAGE_TYPE::CHAT) {
-                PlayerHeader msg;
-                memcpy(&msg, buffer + sizeof(HeaderResponse),
-                       sizeof(PlayerHeader));
+        PlayerHeader msg;
+        memcpy(&msg, buffer + sizeof(HeaderResponse), sizeof(PlayerHeader));
 
-                if (strcmp(msg.message, "Message sent") == 0) {
-                    std::string lastMessage =
-                        args->player->getLastMessageSent();
-                    mvprintw(line, static_cast<int>(lastMessage.size()) + 20,
-                             "%s", msg.message);
-                } else {
-                    std::string displayText =
-                        std::string(msg.username) +
-                        " says: " + std::string(msg.message);
-                    mvprintw(line, 50, "%s", displayText.c_str());
-                }
-
-                line += 2;
-                args->player->setLine(line);
-                move(bottomLine, 1 + strlen("> "));
-                refresh();
-            }
-            pthread_mutex_unlock(&controller->chatMutex);
+        if (strcmp(msg.message, "Message sent") == 0) {
+            controller->pushChatUiEvent_({"Message sent", 20}); // status
+        } else {
+            std::string displayText =
+                std::string(msg.username) + " says: " + std::string(msg.message);
+            controller->pushChatUiEvent_({displayText, 50});
         }
     }
 
-    refresh();
     delete args;
     return nullptr;
 }
@@ -477,60 +472,81 @@ void ControllerCLI::captureInputChatRoom(Tetris& tetris) {
     std::string buffer;
 
     while (!done && signal_.getSigIntFlag() == 0) {
-        pthread_mutex_lock(&chatMutex);
-        int line = args->player->getLine();
-        int pos = static_cast<int>(buffer.length());
-        pthread_mutex_unlock(&chatMutex);
+        // 1) afficher les messages entrants
+        ChatUiEvent ev;
+        while (popChatUiEvent_(ev)) {
+            pthread_mutex_lock(&chatMutex);
+
+            int bottomLine = getmaxy(stdscr) - 1;
+            int line = player_->getLine();
+
+            if (line >= bottomLine) {
+                scrl(1);
+                line = bottomLine - 1;
+            }
+
+            move(line, ev.col);
+            clrtoeol();
+            mvprintw(line, ev.col, "%s", ev.text.c_str());
+            player_->setLine(line + 1);
+
+            // redraw prompt
+            move(bottomLine, 1);
+            clrtoeol();
+            mvprintw(bottomLine, 1, "%s", PROMPT_TEXT);
+            pthread_mutex_unlock(&chatMutex);
+
+            refresh();
+        }
+
+        // 2) input
         int ch = getch();
+        if (ch == ERR) continue; // important si timeout()
+
+        int pos = (int)buffer.size();
+        int line = player_->getLine();
 
         switch (ch) {
-            case 27: {
+            case 27: { // ESC
+                chatThreadActive = false;
                 strcpy(you.receiver, "");
                 server_->handleSocialRequest(SOCIAL_TYPE::LEAVE_CHAT, you);
-                timespec timeout;
-                clock_gettime(CLOCK_REALTIME, &timeout);
-                timeout.tv_sec += 0;
-                timeout.tv_nsec += 100000000;
 
-                int join_result =
-                    pthread_timedjoin_np(chatThread, nullptr, &timeout);
-                if (join_result == ETIMEDOUT) {
-                    pthread_cancel(chatThread);
-                    pthread_detach(chatThread);
-                }
+                // idéalement join propre
+                pthread_join(chatThread, nullptr);
 
                 tetris.setMenuState(MENU_STATE::PROFILE);
                 done = true;
             } break;
+
             case '\n': {
                 pthread_mutex_lock(&chatMutex);
                 view_->refreshChatView(line, buffer);
+                pthread_mutex_unlock(&chatMutex);
+
                 if (!buffer.empty()) {
                     args->player->setLastMessageSent(buffer);
                     chatModel_->sendMessage(server_, friendSelected, buffer);
-                    pthread_mutex_unlock(&chatMutex);
-                } else {
-                    pthread_mutex_unlock(&chatMutex);
+                    buffer.clear();
                 }
-                buffer.clear();
             } break;
 
             case KEY_BACKSPACE:
             case 127:
             case '\b': {
-                if (pos > 0) {
+                if (!buffer.empty()) {
                     buffer.pop_back();
                     pthread_mutex_lock(&chatMutex);
-                    view_->handleBackSpace(pos - 1, ' ');
+                    view_->handleBackSpace((int)buffer.size(), ' ');
                     pthread_mutex_unlock(&chatMutex);
                 }
             } break;
 
             default: {
-                if (isprint(ch) && buffer.length() < MAX_LENGTH_MESSAGES) {
-                    buffer.push_back(static_cast<char>(ch));
+                if (isprint(ch) && buffer.size() < MAX_LENGTH_MESSAGES) {
+                    buffer.push_back((char)ch);
                     pthread_mutex_lock(&chatMutex);
-                    view_->renderChatPrompt(pos, ch);
+                    view_->renderChatPrompt((int)buffer.size() - 1, (char)ch);
                     pthread_mutex_unlock(&chatMutex);
                 }
             } break;

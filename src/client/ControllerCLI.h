@@ -5,6 +5,7 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <queue>
 
 #include "ChatModel.h"
 #include "SocialView.h"
@@ -20,6 +21,11 @@ struct Terminal {
     int oldf;
 };
 
+struct ChatUiEvent {
+    std::string text;
+    int col; // ex 1 pour "You", 50 pour "friend"
+};
+
 class SocialView;
 class ChatModel;
 
@@ -29,6 +35,8 @@ class ControllerCLI final : public IController {
     pthread_t thread;
     pthread_t chatThread;
     pthread_mutex_t chatMutex;
+    std::mutex chatQueueMtx_;
+    std::queue<ChatUiEvent> chatQueue_;
     bool chatThreadActive = false;
     std::atomic<bool> threadActive;
     std::unique_ptr<ThreadData> data_;
@@ -46,6 +54,8 @@ class ControllerCLI final : public IController {
     void captureInputPlayMenu(Tetris& tetris);
     void captureInputCreatingMenu(Tetris& tetris);
     void captureInputChatRoom(Tetris& tetris);
+    void pushChatUiEvent_(ChatUiEvent ev);
+    bool popChatUiEvent_(ChatUiEvent& out);
 
     static void* receiveMessages(void* arg);
 

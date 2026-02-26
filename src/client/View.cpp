@@ -921,6 +921,7 @@ void ViewCLI::showChatRoom() {
     keypad(stdscr, TRUE);
     curs_set(1);
     mvprintw(bottomLine, 1, "%s", PROMPT_TEXT);
+    timeout(50);
 
     refreshScreen();
 }
