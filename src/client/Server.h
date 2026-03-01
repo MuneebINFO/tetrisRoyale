@@ -1,7 +1,6 @@
 #ifndef __CSERVER_H
 #define __CSERVER_H
 #include <memory>
-
 #include "../common/CONSTANT.h"
 #include "../common/header.h"
 
@@ -29,9 +28,7 @@ class Server {
     int getSocket() const { return socket_; }
     int getPlayerID() { return playerID_; }
     bool isConnected() { return connected_; }
-    void handleSocialRequest(SOCIAL_TYPE type, FriendHeader friendHeader);
-    std::vector<ChatHeader> receiveChatListHeader();
-    std::vector<FriendHeader> receiveFriendListHeader();
+    void handleSocialRequest(SOCIAL_TYPE type, PlayerHeader friendHeader);
     std::string receive();
     static void* listenToServer(void* c);
 };

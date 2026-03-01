@@ -14,18 +14,17 @@ enum class MESSAGE_TYPE {
     CHAT,
     SYSTEM,
     SOCIAL,
-    INVITEFRIEND,
-    FRIEND,
-    ACCEPTFRIEND,
-    FRIENDLIST,
-    REQUESTFRIENDLIST
+    LEADERBOARD,
+    
 };
+// WTF is this again ?
 enum class FRIEND_REQUEST_STATUS {
     NONE,
-    PLAYER_NOT_FOUND,
     FRIEND_REQUEST_SENT,
     ALREADY_IN_LIST,
     SELF_ADD_FORBIDDEN,
+    PLAYER_NOT_FOUND,
+    NO_FRIENDS,
     FRIEND_REQUEST_ALREADY_SENT,
 };
 
@@ -41,6 +40,9 @@ enum class SOCIAL_TYPE {
     GET_LOBBY_INVITE,
     INCHATROOM,
     LEAVE_CHAT,
+    GET_USERS,
+    REMOVE_FRIEND,
+    UPDATE_HIGHSCORE,
 };
 
 enum class GAME_TYPE {
@@ -50,13 +52,11 @@ enum class GAME_TYPE {
     BONUS,
     START,
     END,
-    SPAWN_TETRAMINO,
+    TETRAMINO_REQUEST,
     LOCK,
-    MALUS_CONFIRM,
     UPDATEGRID,
     WIN,
     LOST,
-    TETRAMINO_REQUEST,
     MALUS_AUTHORISATION,
     BONUS_AUTHORISATION
 };
@@ -73,11 +73,13 @@ struct AccountHeader {
     char password[MAX_NAME_LENGTH];
 };
 
-struct FriendHeader {
+struct PlayerHeader {
     char username[MAX_NAME_LENGTH];
     int idPlayer;
-    char message[MAX_LENGTH_MESSAGES]; // pr inclure un message txt (chat)
-    char receiver[MAX_NAME_LENGTH]; // pr inclure un message txt (chat)
+    char message[MAX_LENGTH_MESSAGES];
+    char receiver[MAX_NAME_LENGTH];
+    int highScore;
+    FRIEND_REQUEST_STATUS status;
 };
 
 struct ChatHeader {
@@ -97,6 +99,7 @@ struct LobbyHeader {
 // Should be followed by LobbyInvitation * numberOfInvitations
 struct LobbyInviteFriend {
     int idRoom;
+    int idPlayer;
     char nameInviting[MAX_NAME_LENGTH];
     char gameMode[MAX_NAME_LENGTH];
     bool asGamer;
@@ -108,6 +111,9 @@ struct LobbyInvitation {
     int idPlayerInviting;
     int roomId;
     char gameMode[MAX_NAME_LENGTH];
+    bool asGamer;
+};
+struct LobbyJoinning {
     bool asGamer;
 };
 
@@ -166,12 +172,11 @@ struct SpawnTetraminoPayload {
     uint8_t x;
     uint8_t y;
     uint8_t color;
-
 };
 
 struct GridUpdate {
-    int playerID;
     char username[32];
+    int playerID;
     uint8_t grid[HEIGHT][WIDTH];
 };
 
@@ -199,7 +204,6 @@ struct AccountResponseHeader {
 struct HeaderResponse {
     MESSAGE_TYPE type;
     uint32_t sizeMessage;
-    FRIEND_REQUEST_STATUS status;
 };
 
 struct LobbyResponseHeader {

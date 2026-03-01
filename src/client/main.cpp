@@ -1,19 +1,11 @@
-#include <ncurses.h>
-
-#include <csignal>
 #include <cstdlib>
-#include <ctime>
 
-#include "Game.h"
-#include "Player.h"
-#include "Signal.h"
 #include "Tetris.h"
-Signal* Signal::instance_ = nullptr;
 
-int main() {
-    Signal::getInstance();
+int main(int argc, char* argv[]) {
     Tetris tetris;
+    tetris.init();
     tetris.run();
-    endwin();
+    
     return EXIT_SUCCESS;
 }

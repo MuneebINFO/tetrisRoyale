@@ -31,11 +31,6 @@ class Lobby {
     std::string gameMode_;
     int gameRoomId_ = -1;
     bool isGamer_;
-    bool isChoosing_;
-    bool isChoosingMode_;
-    bool isChoosingNumber_;
-    bool hasChoosedNumber_;
-    bool hasChoosedMode_;
     bool isSetup_;
 
    public:
@@ -79,16 +74,6 @@ class Lobby {
     void setIsGamer(bool gamer) { isGamer_ = gamer; }
     bool getIsGamer() { return isGamer_; }
     void setGameMode(std::string gameMode) { gameMode_ = gameMode; }
-    bool hasChoosedNumber() { return numberOfPlayer_ > 0; }
-    bool hasChoosedMode() { return gameMode_ != ""; }
-    bool isChoosing() const { return isChoosing_; }
-    void setChoosing(bool choosing) { isChoosing_ = choosing; }
-    bool isChoosingMode() const { return isChoosingMode_; }
-    void setChoosingMode(bool choosingMode) { isChoosingMode_ = choosingMode; }
-    bool isChoosingNumber() const { return isChoosingNumber_; }
-    void setChoosingNumber(bool choosingNumber) {
-        isChoosingNumber_ = choosingNumber;
-    }
     void setIsSetup(bool setup) { isSetup_ = setup; }
     bool getIsSetup() { return isSetup_; }
     std::shared_ptr<IView> getView() { return view_; }

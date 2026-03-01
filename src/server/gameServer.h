@@ -7,8 +7,9 @@
 #include <iostream>
 #include <map>
 #include <memory>
-#include <vector>
 #include <random>
+#include <vector>
+#include <algorithm>
 
 #include "../common/CONSTANT.h"
 #include "../common/header.h"
@@ -19,13 +20,30 @@ struct Position {
     int y_;
 };
 
+struct Tetramino {
+    int x_, y_;  // position de départ
+    std::vector<std::vector<int>> shape_;
+    std::uint8_t colorIndex_;
+
+    Tetramino() : x_(0), y_(0), shape_(4, std::vector<int>(4, 0)), colorIndex_(0) {}
+
+    Tetramino(int x, int y, std::vector<std::vector<int>> shape,
+              std::uint8_t colorIndex)
+        : x_(x), y_(y), shape_(shape), colorIndex_(colorIndex) {}
+};
+
 struct GameState {
     Position current_;
+    Tetramino currentTetramino;
     int points_ = 0;
+    int miniTetraCount_ = 0;
     std::vector<std::vector<int>> grid_;
     std::vector<std::vector<int>>
         currentShape_;  // matrice du tetramino courant
+    // les précédentes couleurs des tetraminos
+    std::vector<std::uint8_t> previousColors_;
 
+    // initialise la grille et le shape du tetramino
     void init() {
         grid_.resize(HEIGHT, std::vector<int>(WIDTH, 0));
         currentShape_.clear();
@@ -42,6 +60,7 @@ struct Player {
     char receiver[MAX_NAME_LENGTH];
     std::shared_ptr<GameRoom> gameRoom;    // lien vers la salle de jeu
     std::shared_ptr<GameState> gameState;  // état du joueur
+    int energy = 0;
 };
 
 struct UserAccount {
@@ -61,12 +80,15 @@ class GameRoom : public std::enable_shared_from_this<GameRoom> {
     uint8_t nbrGamerMax_;
     int nbrPlayers_;
     std::map<int, std::shared_ptr<Player>> players_;
+    // les sockets suivis et les sockets prêts à lire/écrire
     fd_set allActiveSockets_, readySockets_;
+    // plus grand des descripteurs de fichiers
     int maxFD_;
     std::string gameMode_;
 
     void handlePlayerMessages(std::shared_ptr<Player> player);
-    void processMessage(std::shared_ptr<Player> player, const std::string& message);
+    void processMessage(std::shared_ptr<Player> player,
+                        const std::string& message);
 
    public:
     static void* loop(void*);
@@ -83,6 +105,7 @@ class GameRoom : public std::enable_shared_from_this<GameRoom> {
     void sendEndLobby();
     void sendParticipantLeaving(std::shared_ptr<Player> player, bool);
     void handleStartRequest(std::shared_ptr<Player> player);
+    void deleteAllInvitations(int roomId);
     int countAlivePlayers();
 
     // Getters and setters
@@ -100,48 +123,57 @@ class GameRoom : public std::enable_shared_from_this<GameRoom> {
     uint8_t getNbrGamerMax() { return nbrGamerMax_; }
     void setGameMode(const std::string& mode) { gameMode_ = mode; }
     std::string getGameMode() { return gameMode_; }
-    const std::map<int, std::shared_ptr<Player>>& getPlayers() const { return players_; }
-    std::shared_ptr<GameRoom> getShared() {
-        return shared_from_this();
-    } 
+    const std::map<int, std::shared_ptr<Player>>& getPlayers() const {
+        return players_;
+    }
+
+    // Permet d’obtenir un shared_ptr vers cette instance
+    std::shared_ptr<GameRoom> getShared() { return shared_from_this(); }
 };
 
 class GameServer {
    private:
-    std::string currentMode_;
+    std::shared_ptr<Player> currentPlayer;
+    std::shared_ptr<GameState> currentPlayerGameState;
 
    public:
-    bool handleSpawnTetramino(std::shared_ptr<Player>& player,
-                              SpawnTetraminoPayload& payload);
-    void handleMove(std::shared_ptr<Player>& player, GameUpdateHeader& update,
-                    MovementPayload& payload);
-    void handleRotate(std::shared_ptr<Player>& player, GameUpdateHeader& update,
-                      RotationPayload& payload);
-    void handleConfirmMalus(std::shared_ptr<Player>& player, 
-                            MalusPayload& payload);
-    void handleMalus();
-    void handleBonus();
-    void handlestart();
-    void handleEnd();
+    GameServer(std::shared_ptr<Player> player_, std::shared_ptr<GameState> gs)
+        : currentPlayer(player_), currentPlayerGameState(gs) {}
+    
+
+    std::shared_ptr<Player>& getPlayer() { return currentPlayer; }
+    std::shared_ptr<GameState>& getPlayerGameState() {
+        return currentPlayerGameState;
+    }
+
+    Tetramino generateRandomTetramino();
+    bool handleTetramino(SpawnTetraminoPayload& payload);
+    void handleMove(GameUpdateHeader& update, MovementPayload& payload);
+    bool handleRotate(GameUpdateHeader& update, RotationPayload& payload);
+    void handleMalus(MalusPayload& payload);
+    void handleBonus(BonusPayload& payload);
 
     std::vector<std::vector<int>> rotate(
         const std::vector<std::vector<int>>& shape, bool clockwise);
-    void clearOrReplaceForMove(std::vector<std::vector<int>>& shape,
-                               std::vector<std::vector<int>>& grid,
-                               const Position& t, bool info);
-    void clearOrReplaceForRotate(GameState& gs,
-                                 std::vector<std::vector<int>>& shape,
-                                 const Position& t, bool info);
-    bool canMoveOrPlace(const GameState& gameState, int dx, int dy);
-    void clearFullRow(GameState& gs, GameUpdateHeader& update);
+    // vérifie si le tetramino peut être déplace à une position donnée
+    bool canMoveOrPlace(int dx, int dy);
+    void clearFullRow(GameUpdateHeader& update);
     bool checkRotation(std::vector<std::vector<int>>& rotatedShape,
-                        GameState& gs, Position& t);
-    void checkIfMalus(GameUpdateHeader &update, std::shared_ptr<Player> &player);
-    void sendGridToOpponent(std::shared_ptr<Player>& player,
-                            GameState& gs);
-    void sendMalus(std::string gameMode, int targetSocket, int lines);
-    int randomTarget(std::shared_ptr<Player>& sender);
-    int getOpponentSocket(std::shared_ptr<Player>& sender);
+                       Tetramino& t);
+    void checkIfMalus(GameUpdateHeader& update);
+    void sendGridToOpponent();
+    // envoie le malus du mode Classic et Duel
+    void sendRowMalus(int targetSocket, int lines, int emptyIdx);
+    int randomTarget();
+    int getOpponentSocket();
+    int IdToSocket(int playerID);
+    bool isMiniTetraActive(std::shared_ptr<GameState> &gs) { return gs->miniTetraCount_ > 0; }
+    void setMiniTetra(std::shared_ptr<GameState> &gs) { gs->miniTetraCount_ = 2; }
+    void reduceMiniTetraCount(std::shared_ptr<GameState> &gs) { gs->miniTetraCount_--; }
+    void addPoints(std::shared_ptr<GameState> &gs, int points) { gs->points_ += points; }
+    int addMalusRow(std::vector<std::vector<int>>& grid, int malusCount);
+    // renvoie la réference de la grille d'un autre joueur de la gameroom
+    std::vector<std::vector<int>>& getGridFromSocket(int socket);
 };
 
 #endif

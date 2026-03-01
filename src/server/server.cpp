@@ -55,6 +55,7 @@ Server::Server() : db(nullptr) {
 
 void Server::initializeDatabase() {
     try {
+
         db = new pqxx::connection(
             "dbname=game_server user=tetris password='tetris' host=127.0.0.1 "
             "port=5432");
@@ -332,6 +333,7 @@ std::string Server::getUserAccount(int playerID) {
     }
     return "";
 }
+
 void Server::broadcastToLobby(int clientSocket, const void* data, size_t size) {
     auto lobby = getLobbyForClient(clientSocket);
     if (lobby) {
@@ -348,7 +350,7 @@ std::shared_ptr<Player> Server::getPlayer(int socket) {
 
     if (it != clients.end()) {
         if (!it->second->gameState) {  // Vérifie si gameState n'est
-                                      // pas encore initialisé
+                                       // pas encore initialisé
             it->second->gameState = std::make_shared<GameState>();
         }
         return it->second;
@@ -381,8 +383,8 @@ void Server::cleanupLobby(int clientSocket) {
     if (lobby) {
         auto& players = lobby->getPlayers();
         if (players.find(clientSocket) != players.end()) {
-            lobby->removePlayer(
-                players.at(clientSocket));  // Passer l'objet std::shared_ptr<Player>
+            lobby->removePlayer(players.at(
+                clientSocket));  // Passer l'objet std::shared_ptr<Player>
         }
 
         if (lobby->getPlayers().empty()) {  // Vérification via le getter

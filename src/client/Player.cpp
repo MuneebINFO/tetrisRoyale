@@ -4,11 +4,11 @@
 #include <vector>
 
 #include "Controller.h"
+#include "View.h"
 #include "InvitationManager.h"
 #include "Message.h"
 #include "Server.h"
 #include "Tetris.h"
-#include "View.h"
 
 Player::Player(std::shared_ptr<IView> view,
                std::shared_ptr<IController> controller,
@@ -24,6 +24,14 @@ Player::Player(std::shared_ptr<IView> view,
       view_{view},
       controller_{controller} {}
 
+void Player::setHightScore(int score) {
+    if (score > player_.highScore) {
+        player_.highScore = score;
+        if (auto server = getServer()) {
+            server->handleSocialRequest(SOCIAL_TYPE::UPDATE_HIGHSCORE, player_);
+        }
+    }
+}
 bool Player::login(Tetris* tetris) {
     AccountResponseHeader response;
     ACCOUNT_RESPONSE result = ACCOUNT_RESPONSE::VALID;
@@ -31,13 +39,15 @@ bool Player::login(Tetris* tetris) {
     char buffer[BUFFER_SIZE];
     std::string pseudo;
     std::string password;
+    std::shared_ptr<IView> view = getView();
+    std::shared_ptr<Server> server = getServer();
 
-    ACCOUNT_STATE step = view_->showAccountConnection();
+    ACCOUNT_STATE step = view->showAccountConnection();
     ACCOUNT_TYPE type = translateAccountState(step);
 
-    if (!server_->isConnected()) {
-        view_->showMessage("Error: Connection to server failed", 20);
-        view_->showMessage("Disconnecting...", 21);
+    if (!server->isConnected()) {
+        view->showMessage("Error: Connection to server failed", 20);
+        view->showMessage("Disconnecting...", 21);
         sleep(2);
         return false;
     }
@@ -50,13 +60,13 @@ bool Player::login(Tetris* tetris) {
             continue;
         }
         message.serializeConnection(type, pseudo, password, buffer);
-        server_->sendMessage(buffer, sizeof(Header) + sizeof(AccountHeader));
-        server_->receiveMessage(buffer);
+        server->sendMessage(buffer, sizeof(Header) + sizeof(AccountHeader));
+        server->receiveMessage(buffer);
         response = message.fromBuffer(buffer);
         result = response.responseType;
         if (result == ACCOUNT_RESPONSE::ERROR ||
             result == ACCOUNT_RESPONSE::EXIST) {
-            view_->setErrorMessage(std::string(response.message));
+            view->setErrorMessage(std::string(response.message));
         }
 
     } while (result != ACCOUNT_RESPONSE::VALID and
@@ -69,15 +79,18 @@ bool Player::login(Tetris* tetris) {
 }
 
 std::pair<std::string, std::string> Player::getUserInfo(ACCOUNT_STATE step) {
+    std::shared_ptr<IController> controller = getController();
+    std::shared_ptr<IView> view = getView();
     if (step == ACCOUNT_STATE::LOGIN) {
-        view_->showLogin();
+        view->showLogin();
     } else if (step == ACCOUNT_STATE::SIGNUP) {
-        view_->showSignUp();
+        view->showSignUp();
     }
-    std::pair<std::string, std::string> info = controller_->getUserLoginInfo();
+    std::pair<std::string, std::string> info = controller->getUserLoginInfo();
     return info;
 }
 
+// Allow to switch between server talk and client usage
 ACCOUNT_TYPE Player::translateAccountState(ACCOUNT_STATE menu) {
     switch (menu) {
         case ACCOUNT_STATE::LOGIN:
@@ -96,4 +109,25 @@ ACCOUNT_TYPE Player::translateAccountState(ACCOUNT_STATE menu) {
 std::vector<LobbyInvitation> Player::getLobbyInvitations() {
     InvitationManager invitationManager(shared_from_this());
     return invitationManager.getLobbyInvitations();
+}
+// GETTER AND SETTER
+
+std::shared_ptr<Server> Player::getServer() {
+    if (auto server = server_.lock()) {
+        return server;
+    }
+    return nullptr;
+}
+std::shared_ptr<IView> Player::getView() {
+    if (auto view = view_.lock()) {
+        return view;
+    }
+    return nullptr;
+}
+
+std::shared_ptr<IController> Player::getController() {
+    if (auto controller = controller_.lock()) {
+        return controller;
+    }
+    return nullptr;
 }
