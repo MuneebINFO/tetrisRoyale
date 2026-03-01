@@ -7,7 +7,31 @@
 InvitationManager::InvitationManager(std::shared_ptr<Player> player)
     : player_(player) {}
 
-// Function to get the lobby invitations for the player
+void InvitationManager::refreshInvitationsList(std::shared_ptr<Server> server_,
+                                               FriendHeader player) {
+    server_->handleSocialRequest(SOCIAL_TYPE::GET_FRIEND_REQUEST, player);
+    std::vector<FriendHeader> requestList = server_->receiveFriendListHeader();
+    player_->setVectorInvitations(requestList);
+}
+
+bool InvitationManager::acceptInvitation(int invitationId) {
+    std::vector<FriendHeader> invitations = player_->getVectorInvitations();
+    if (invitations.empty()) return false;
+
+    for (auto it = invitations.begin(); it != invitations.end(); ++it) {
+        if (it->idPlayer == invitationId) {
+            invitations.erase(it);
+            break;
+        }
+    }
+    player_->setVectorInvitations(invitations);
+    return true;
+}
+
+bool InvitationManager::hasInvitations() const {
+    return !player_->getVectorInvitations().empty();
+}
+
 std::vector<LobbyInvitation> InvitationManager::getLobbyInvitations() {
     std::shared_ptr<Server> server = player_->getServer();
     Message message;

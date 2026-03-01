@@ -5,12 +5,12 @@
 #include <memory>
 
 #include "Controller.h"
-#include "View.h"
 #include "Game.h"
 #include "Message.h"
 #include "Player.h"
 #include "Server.h"
 #include "Tetris.h"
+#include "View.h"
 
 Lobby::Lobby(Tetris& tetris, std::shared_ptr<IController> controller,
              std::shared_ptr<Player> player, std::shared_ptr<IView> view,
@@ -24,6 +24,9 @@ Lobby::Lobby(Tetris& tetris, std::shared_ptr<IController> controller,
       groupeLeader_{false},
       numberOfPlayer_{},
       gameMode_{},
+      isChoosing_{false},
+      isChoosingMode_{false},
+      isChoosingNumber_{false},
       isSetup_{false} {
     groupeLeader_ = player_->getPlayerId();
 }
@@ -39,6 +42,7 @@ Lobby::~Lobby() {
     server_->sendMessage(buffer, sizeof(Header) + sizeof(LobbyHeader));
 }
 void Lobby::setupGame() {
+    // send message to server.
     if (getIsSetup()) {
         return modifyLobby();
     }
@@ -69,21 +73,13 @@ void Lobby::startGame() {
     try {
         std::unique_ptr<Game> game =
             std::make_unique<Game>(player_, view_, controller_, server_);
-
         game->setupBoards({1, 2, 3, 4, 5, 6, 7}, true);
-        game->setIsSpectator(!getIsGamer());
-        game->setGameMode(gameMode_);
-        if (getIsGamer()) {
-            game->start();
-        } else {
-            game->startSpectator();
-        }
-        game = nullptr;
+        game->start();
+
     } catch (const std::exception& e) {
         std::cerr << e.what() << std::endl;
         return;
     }
-    reset();
 }
 
 void Lobby::sendNotification(LobbyInviteFriend& lIF) {
@@ -123,6 +119,11 @@ void Lobby::reset() {
     gameRoomId_ = -1;
     players_.clear();
     spectators_.clear();
+    isChoosing_ = false;
+    isChoosingMode_ = false;
+    isChoosingNumber_ = false;
+    hasChoosedNumber_ = false;
+    hasChoosedMode_ = false;
     isSetup_ = false;
 }
 void Lobby::modifyLobby() {
@@ -133,8 +134,6 @@ void Lobby::sendUpdateLobby() {
     char buffer[BUFFER_SIZE];
     Message message;
     message.serializeLobby(LOBBY_TYPE::MODIFY, *this, buffer);
-    LobbyHeader lobbyHeader;
-    memcpy(&lobbyHeader, buffer + sizeof(Header), sizeof(LobbyHeader));
     server_->sendMessage(buffer, sizeof(Header) + sizeof(LobbyHeader));
 }
 void Lobby::leaveLobby() {
@@ -152,7 +151,6 @@ void Lobby::leaveLobby() {
     memcpy(buffer + sizeof(Header), &lobbyHeader, sizeof(LobbyHeader));
     server_->sendMessage(buffer, sizeof(Header) + sizeof(LobbyHeader));
 }
-// Send the message to the server for joining the lobby
 void Lobby::joinLobby(LobbyInvitation invitation) {
     int gameRoomId = invitation.roomId;
     setIsGamer(invitation.asGamer);
@@ -168,23 +166,18 @@ void Lobby::joinLobby(LobbyInvitation invitation) {
     memcpy(&header, buffer + sizeof(Header), sizeof(LobbyHeader));
     header.idRoom = gameRoomId;
     memcpy(buffer + sizeof(Header), &header, sizeof(LobbyHeader));
-    LobbyJoinning LbJ = {.asGamer = getIsGamer()};
-    memcpy(buffer + sizeof(Header) + sizeof(LobbyHeader), &LbJ,
-           sizeof(LobbyJoinning));
-    server_->sendMessage(
-        buffer, sizeof(Header) + sizeof(LobbyHeader) + sizeof(LobbyJoinning));
+    server_->sendMessage(buffer, sizeof(Header) + sizeof(LobbyHeader));
     setIsSetup(true);
+    waitGameStart(false);
 }
 
-// Wait for the game to start in the lobby
-// Process the server messages and user input
 void Lobby::waitGameStart(bool isLeader) {
     Signal& signal = Signal::getInstance();
     bool running = true;
     int socketFd = server_->getSocket();
     fd_set readfds;
     int maxfd = std::max(STDIN_FILENO, socketFd);
-    while (running and getIsSetup() and signal.getSigIntFlag() == 0) {
+    while (running and signal.getSigIntFlag() == 0) {
         view_->showLobbyWaitingRoom(isLeader);
         FD_ZERO(&readfds);
         FD_SET(STDIN_FILENO, &readfds);
@@ -196,13 +189,13 @@ void Lobby::waitGameStart(bool isLeader) {
         }
         if (FD_ISSET(socketFd, &readfds)) {
             LobbyMessage lobbyMessage = LobbyMessage(server_);
-            lobbyMessage.handleWaitingRoom(this, running);
-        } else if (FD_ISSET(STDIN_FILENO, &readfds)) {
+            lobbyMessage.handleWaitingRoom(*this, running);
+        }
+        if (FD_ISSET(STDIN_FILENO, &readfds)) {
             controller_->waitingRoomInput(isLeader, running);
         }
     }
     reset();
-    tetris_.setMenuState(MENU_STATE::MAIN);
 }
 
 void Lobby::addPlayer(int playerId, std::string playerName, bool isGamer) {

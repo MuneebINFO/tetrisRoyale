@@ -7,6 +7,7 @@
 #include "../common/header.h"
 #include "server.h"
 
+
 class IMessage {
    public:
     IMessage() = default;
@@ -35,28 +36,14 @@ class GameMessage final : public IMessage {
     GameTypeHeader header_;
 
     // Helper methods to handle specific game actions
-    void handleTetraminoMsg(int clientSocket);
-    void sendEndGameMsg(std::shared_ptr<GameRoom>);
+    void handleSpawnTetraminoMsg(const char* details, int clientSocket);
     void handleMoveMsg(const char* details, int clientSocket);
     void handleRotateMsg(const char* details, int clientSocket);
     void handleMalusMsg(const char* target, int clientSocket);
-    void handleBonusMsg(const char* details, int clientSocket);
+    void handleBonusMsg(const char* target, int clientSocket);
     void handleStartMsg(int clientSocket);
     void handleEndMsg(int clientSocket);
-    void handleMalusAuthorisationMsg(int clientSocket);
-    void handleBonusAuthorisationMsg(int clientSocket);
-    void sendTetraminoMsg(SpawnTetraminoPayload& payload,
-                            Server &server,
-                            int clientSocket);
-    void sendWinMsg(Server& server, 
-                    std::shared_ptr<GameRoom> gameRoom, 
-                    std::map<int, std::shared_ptr<Player>> players,
-                    GameServer game);
-    void sendLoseMsg(std::shared_ptr<Player>& player, 
-                    Server& server, 
-                    std::shared_ptr<GameRoom> gameRoom,
-                    int clientSocket);
-
+    void handleConfirmMalusMsg(const char* target, int clientSocket);
 
    public:
     void handleMessage(const std::string& message,
@@ -66,7 +53,6 @@ class GameMessage final : public IMessage {
 class LobbyMessage final : public IMessage {
     LobbyHeader header_;
 
-    // Helper methods to handle specific Lobby actions
     void handleCreate(const std::string& message, int clientSocket);
     void handleModify(const std::string& message);
     void handleJoin(const std::string& message, int clientSocket);
@@ -93,33 +79,26 @@ class SystemMessage final : public IMessage {
 };
 
 class SocialMessage final : public IMessage {
-   private:
-    void handleGetLobbyInvite(const std::string& message, int clientSocket);
-    void inviteFriend(const std::string& message, int clientSocket = -1);
-    void getFriendRequest(const std::string& message, int clientSocket = -1);
-    void getFriendList(const std::string& message, int clientSocket = -1);
-    void acceptFriendinvite(const std::string& message, int clientSocket = -1);
-    void sendMessages(const std::string& message, int clientSocket = -1);
-    void getMessages(const std::string& message, int clientSocket = -1);
-    void saveMessageToDatabase(int senderId, int receiverId,
-                               const std::string& message);
-    std::vector<std::pair<int, std::string>> loadMessageHistory(int player1Id,
-                                                                int player2Id);
-    void inChatRoom(const std::string& message, int clientSocket = -1);
-    void leaveChat(const std::string& message, int clientSocket = -1);
-    void getUsers(const std::string& message, int clientSocket = -1);
-    void getFriendData(const std::string& message, int clientSocket,
-                       const std::string& queryTemplate,
-                       const std::string& countQueryTemplate, SOCIAL_TYPE type);
-    void removeFriend(const std::string& message, int clientSocket = -1);
-    FRIEND_REQUEST_STATUS processInviteRequest(int invitingPlayerId,
-                                               int invitedPlayerID,
-                                               pqxx::connection* db);
-    void updateHighScore(const std::string& message, int clientSocket = -1);
-
-   public:
-    void handleMessage(const std::string& message,
-                       int clientSocket = -1) override;
-};
+    private:
+     void handleGetLobbyInvite(const std::string& message, int clientSocket);
+     void inviteFriend(const std::string& message, int clientSocket = -1);
+     void getFriendRequest(const std::string& message, int clientSocket = -1);
+     void getFriendList(const std::string& message, int clientSocket = -1);
+     void acceptFriendinvite(const std::string& message, int clientSocket = -1);
+     void sendMessages(const std::string& message, int clientSocket = -1);
+     void getMessages(const std::string& message, int clientSocket = -1);
+     void saveMessageToDatabase(int senderId, int receiverId, const std::string& message);
+     std::vector<std::pair<int, std::string>> loadMessageHistory(int player1Id, int player2Id);
+     void inChatRoom(const std::string& message, int clientSocket = -1);
+     void leaveChat(const std::string& message, int clientSocket = -1);
+     // New helper methods
+     void getFriendData(const std::string& message, int clientSocket, 
+                      const std::string& queryTemplate, const std::string& countQueryTemplate);
+     FRIEND_REQUEST_STATUS processInviteRequest(int invitingPlayerId, int invitedPlayerID, pqxx::connection* db);
+    
+    public:
+     void handleMessage(const std::string& message,
+                        int clientSocket = -1) override;
+ };
 
 #endif

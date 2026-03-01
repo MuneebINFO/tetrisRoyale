@@ -20,7 +20,14 @@ class InvitationManager {
 
     // Core functionality
     std::vector<LobbyInvitation> getLobbyInvitations();
+    void refreshInvitationsList(std::shared_ptr<Server> server_,
+                                FriendHeader player);
+    bool acceptInvitation(int invitationId);
+    std::vector<int> getInvitations() const;
 
+    // Helper methods
+    bool hasInvitations() const;
+    // void removeInvitationById(int invitationId);
 };
 
 #endif

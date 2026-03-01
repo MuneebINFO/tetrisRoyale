@@ -1,7 +1,6 @@
 #ifndef __CONSTANT_H
 #define __CONSTANT_H
 
-#include <cstring>
 #include <string>
 #include <vector>
 
@@ -13,13 +12,10 @@ constexpr const int NUMBER_OF_COLORS = 7;
 constexpr const int PLAYERS_NUMBERS[] = {1, 2, 3, 4, 5, 6, 7, 8};
 constexpr const int SLEEP_TIME = 1000000;
 
-constexpr const char* PROMPT_TEXT = "> ";
-constexpr const int promptLength = 2;
 constexpr const int MAX_PLAYERS_NUMBERS = 8;
-constexpr const int MODE_NUMBERS = 4;
-constexpr const char* GAME_MODE[] = {"Endless", "Dual", "Classic",
-                                     "Tetris Royal"};
-enum class GAME_MODE { ENDLESS, DUAL, CLASSIC, TETRIS_ROYAL };
+constexpr const int MODE_NUMBERS = 3;
+constexpr const char* GAME_MODE[] = {"Endless", "Dual", "Classic"};
+enum class GAME_MODE { ENDLESS, DUAL, CLASSIC};
 
 constexpr const int BUFFER_SIZE = 1024;
 constexpr const int MAX_LENGTH_MESSAGES = 256;

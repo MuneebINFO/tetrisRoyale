@@ -1,77 +1,59 @@
 #include "Tetris.h"
 
+#include <ncurses.h>
+
 #include <cstdio>
 
-#include "ChatController.h"
 #include "ControllerCLI.h"
-#include "SocialController.h"
-#include "ChatView.h"
-#include "ViewCLI.h"
-#include "ChatModel.h"
 #include "InvitationManager.h"
 #include "Lobby.h"
 #include "Player.h"
 #include "Server.h"
 #include "Signal.h"
+#include "ViewCLI.h"
 
-Tetris::Tetris()
+
+Tetris::Tetris(bool gui)
     : signal_{Signal::getInstance()}, menuState_{MENU_STATE::MAIN} {
+    
+    view_ = std::make_shared<ViewCLI>();
+    controller_ = std::make_shared<ControllerCLI>(view_);
+
     server_ = std::make_shared<Server>();
+    player_ = std::make_shared<Player>(view_, controller_, server_);
+    lobby_ = std::make_shared<Lobby>(*this, controller_, player_, view_, server_);
+    view_->setLobby(lobby_);
+    view_->setPlayer(player_);
+    controller_->setLobby(lobby_);
+    controller_->setServer(server_);
+    controller_->setPlayer(player_);
+    server_->setPlayer(player_);
 }
 
 Tetris::~Tetris() {
     endwin();
 }
 
-// More of a constructor than a function
-void Tetris::init() {
-    view_ = std::make_shared<ViewCLI>();
-    controller_ = std::make_shared<ControllerCLI>(view_);
-    
-    socialController_ = std::make_shared<SocialController>();
-    socialView_ = std::make_shared<SocialView>();
-    chatController_ = std::make_shared<ChatController>();
-    chatView_ = std::make_shared<ChatView>();
-    player_ = std::make_shared<Player>(view_, controller_, server_);
-    lobby_ =
-        std::make_shared<Lobby>(*this, controller_, player_, view_, server_);
-    view_->setLobby(lobby_);
-    view_->setPlayer(player_);
-    view_->setServer(server_);
-    socialView_->setViewCLI(std::dynamic_pointer_cast<ViewCLI>(view_));
 
-    chatView_->setPlayer(player_);
-    chatView_->setServer(server_);
-    chatView_->setViewCLI(std::dynamic_pointer_cast<ViewCLI>(view_));
-
-    controller_->setLobby(lobby_);
-    controller_->setServer(server_);
-    controller_->setPlayer(player_);
-
-    socialController_->setPlayer(player_);
-    socialController_->setServer(server_);
-    socialController_->setSocialView(socialView_);
-
-    chatController_->setPlayer(player_);
-
-    server_->setPlayer(player_);
-}
-
-bool Tetris::run() {
+void Tetris::run() {
     if (server_->connectToServer() != 0) {
-        return 1;
+        return;
     }
-    if (!player_->login(this)) return 1;
+    if (!player_->login(this)) return;
 
     bool running = true;
     MENU_STATE menu;
 
-    // Core loop
     while (running and signal_.getSigIntFlag() == 0) {
         menu = getMenuState();
         switch (menu) {
             case MENU_STATE::LOBBY: {
-                controller_->captureInputMenuLobby(*this);
+                // Créer objet Lobby
+                lobby_->setGroupeLeader(player_->getPlayerId());
+                if (!lobby_->isChoosing()) {
+                    view_->showMenuLobby();
+                }
+                controller_->captureInput(menu, *this);
                 break;
             }
             case MENU_STATE::MAIN:
@@ -79,15 +61,16 @@ bool Tetris::run() {
                 controller_->captureInput(menu, *this);
                 break;
             case MENU_STATE::INVITATION:
-                socialView_->showInvitationMenu(player_);
-                socialController_->captureInputInvitationMenu(*this);
+                view_->showInvitationMenu(player_);
+                controller_->captureInput(menu, *this);
                 break;
             case MENU_STATE::GAME_INVITATION:
+                // view_->showGameInvitationMenu(player_);
                 controller_->captureInput(menu, *this);
                 break;
             case MENU_STATE::PROFILE:
-                socialView_->showProfileMenu(player_);
-                socialController_->captureInputProfileMenu(*this);
+                view_->showProfileMenu(player_);
+                controller_->captureInput(menu, *this);
                 break;
             case MENU_STATE::RANKING:
                 view_->showMenu(menu);
@@ -98,7 +81,7 @@ bool Tetris::run() {
                 controller_->captureInput(menu, *this);
                 break;
             case MENU_STATE::CHATROOM:
-                view_->showChatRoom();
+                view_->showMenu(menu);
                 controller_->captureInput(menu, *this);
                 break;
             case MENU_STATE::GAME:
@@ -107,6 +90,4 @@ bool Tetris::run() {
                 break;
         }
     }
-    return 0;
 }
-

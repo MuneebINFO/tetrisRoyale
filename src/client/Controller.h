@@ -23,10 +23,10 @@ class Game;
 
 class IController {
    private:
-    std::weak_ptr<IView> view_;
-    std::weak_ptr<Lobby> lobby_;
-    std::weak_ptr<Server> server_;
-    std::weak_ptr<Player> player_;
+    std::shared_ptr<IView> view_;
+    std::shared_ptr<Lobby> lobby_;
+    std::shared_ptr<Server> server_;
+    std::shared_ptr<Player> player_;
     std::shared_ptr<InvitationManager> invitationManager_;
     bool multiplayerMode;
 
@@ -46,19 +46,21 @@ class IController {
     virtual void captureInputMenuLobby(Tetris& tetris) = 0;
     virtual void waitingRoomInput(bool isLeader, bool& running) = 0;
     virtual void waitingRoomAsLeader(bool&) = 0;
-    virtual void handleFriendRequestStatus(const PlayerHeader& invitedPlayer,
-                                           std::shared_ptr<IView> view_) = 0;
+    virtual void captureInputChoiceMenu(int key, int& idx1, int& idx2) = 0;
+    virtual void handleFriendRequestStatus(
+        const HeaderResponse& responseHeader,
+        const FriendHeader& playerNameStr) = 0;
     virtual void stop() = 0;
 
     // SETTER AND GETTER
     void setView(std::shared_ptr<IView> view);
-    std::shared_ptr<IView> getView();
+    std::shared_ptr<IView> getView() { return view_; }
     void setLobby(std::shared_ptr<Lobby> lobby) { lobby_ = lobby; }
-    std::shared_ptr<Lobby> getLobby();
+    std::shared_ptr<Lobby> getLobby() { return lobby_; }
     void setServer(std::shared_ptr<Server> server) { server_ = server; }
-    std::shared_ptr<Server> getServer();
+    std::shared_ptr<Server> getServer() { return server_; }
     void setPlayer(std::shared_ptr<Player> player) { player_ = player; }
-    std::shared_ptr<Player> getPlayer();
+    std::shared_ptr<Player> getPlayer() { return player_; }
     void setInvitationManager(
         std::shared_ptr<InvitationManager> invitationManager);
     std::shared_ptr<InvitationManager> getInvitationManager() {

@@ -70,7 +70,7 @@ $(OBJ_DIR_CLIENT)/%.o: $(TEST_DIR)/%.cpp
 
 # Nettoyage des fichiers générés
 clean:
-	rm -f $(BUILD_DIR)/$(EXEC) $(BUILD_DIR)/$(EXEC)_sanitize $(OBJ_DIR_CLIENT)/* $(OBJ_DIR_SERVER)/*
+	rm -f $(BUILD_DIR)/$(EXEC) $(BUILD_DIR)/$(EXEC)_sanitize $(BUILD_DIR)/$(EXEC)_server $(OBJ_DIR_CLIENT)/* $(OBJ_DIR_SERVER)/*
 
 reset: clean
 

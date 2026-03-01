@@ -3,11 +3,11 @@
 #include <iostream>  
 
 int main() {
-    srand(static_cast<unsigned int>(time(nullptr)));
     try {
         Server& server = Server::getInstance();
         server.run();
 
+    //si une exception est levé -> affiche un message d'erreur
     } catch (const std::exception& exc) {
         std::cerr << "Error : " << exc.what() << std::endl;
     }

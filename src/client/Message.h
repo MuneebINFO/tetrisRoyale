@@ -29,13 +29,13 @@ class LobbyMessage {
    private:
     std::shared_ptr<Server> server_;
 
-    void handleUPDATE_PLAYER(Lobby* lobby, char* buffer);
-    void handleUPDATE(Lobby* lobby, char* buffer);
-    void handleError(Lobby* lobby, char* buffer);
+    void handleUPDATE_PLAYER(Lobby& lobby, char* buffer);
+    void handleUPDATE(Lobby& lobby, char* buffer);
+    void handleError(Lobby& lobby, char* buffer);
 
    public:
     LobbyMessage(std::shared_ptr<Server>);
     ~LobbyMessage() = default;
-    void handleWaitingRoom(Lobby* lobby, bool&);
+    void handleWaitingRoom(Lobby& lobby, bool&);
 };
 #endif

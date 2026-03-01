@@ -12,17 +12,23 @@
 #include <vector>
 
 #include "Controller.h"
-#include "View.h"
 #include "Game.h"
 #include "InvitationManager.h"
 #include "Player.h"
 #include "Server.h"
 #include "Tetris.h"
+#include "View.h"
 
-Board::Board(std::vector<int> idPlayers, bool hasGrid) : hasGrid_{hasGrid} {
+// HACK: Pour simuler les spectateurs
+void copyGrid(
+    std::map<std::uint16_t, std::vector<std::vector<std::uint8_t>>>& grids,
+    std::vector<std::vector<std::uint8_t>> grid);
+
+Board::Board(std::vector<std::uint16_t> idPlayers, bool hasGrid)
+    : hasGrid_{hasGrid} {
     grid_ = std::vector<std::vector<std::uint8_t>>(
         HEIGHT, std::vector<std::uint8_t>(WIDTH, 0));
-    for (int id : idPlayers) {
+    for (std::uint16_t id : idPlayers) {
         boards_[id] = std::vector<std::vector<std::uint8_t>>(
             HEIGHT, std::vector<std::uint8_t>(WIDTH, 0));
     }
@@ -39,7 +45,8 @@ Game::Game(std::shared_ptr<Player> player, std::shared_ptr<IView> view,
       view_{view},
       controller_{controller},
       server_{server},
-      current_{} {
+      previousColors_{},
+      current_{generateRandomTetramino()} {
     if (pthread_mutex_init(&mutexTetramino_, nullptr) != 0 or
         pthread_mutex_init(&mutexGrid_, nullptr) != 0 or
         pthread_mutex_init(&mutexStateM, nullptr) != 0 or
@@ -57,9 +64,8 @@ Game::~Game() {
     pthread_mutex_destroy(&mutexGrid_);
 }
 
-// Handle the falling of the tetramino
 void Game::tetraminoFall() {
-    while (getRunning()) {
+    while (running_) {
         while (getPaused() && getRunning()) {
             pthread_mutex_lock(&mutexStateM);
             pthread_cond_wait(&mutexStateC, &mutexStateM);
@@ -67,18 +73,12 @@ void Game::tetraminoFall() {
         }
 
         sendMovementMessage(1, 0);
-        showGame();
 
-        if (isSpeedUp()) {
-            usleep((SLEEP_TIME / 3) - points_ * 10);
+        pthread_mutex_lock(&mutexGrid_);
+        view_->showGame(this);
+        pthread_mutex_unlock(&mutexGrid_);
 
-        } else if (isSpeedDown()) {
-            usleep((SLEEP_TIME * 3) - points_ * 10);
-
-        } else {
-            usleep(SLEEP_TIME - points_ * 10);
-        }
-
+        usleep(SLEEP_TIME - points_ * 10);
         checkSignal();
     }
 }
@@ -94,50 +94,56 @@ void Game::clearFullRows(GameUpdateHeader& update) {
     }
 
     points_ = update.score;
-    energy += update.linesCleared;
+}
+
+Tetramino Game::generateRandomTetramino() {
+    int shapeIndex = int(rand() % SHAPES.size());
+
+    // Si toutes les couleurs ont été utilisées, on réinitialise
+    if (previousColors_.size() == 7) {
+        previousColors_.clear();
+    }
+
+    // Pour choisir une couleur différente des précédentes
+    std::uint8_t colorIndex;
+    do {
+        colorIndex = std::uint8_t(rand() % NUMBER_OF_COLORS + 1);
+    } while (std::find(previousColors_.begin(), previousColors_.end(),
+                       colorIndex) != previousColors_.end());
+
+    previousColors_.push_back(colorIndex);
+    return Tetramino(0, int(WIDTH / 2 - SHAPES[shapeIndex][0].size() / 2),
+                     SHAPES[shapeIndex], colorIndex);
 }
 
 void Game::checkSignal() {
     if (signal_.getSigIntFlag()) {
-        setRunning(false);
+        running_ = false;
     }
     if (signal_.checkSigTstp(*this) and paused_) {
         // std::cout << "Game is paused" << std::endl;
     }
 }
 
-void Game::startSpectator() {
+void Game::start() {
     view_->clearScreen();
-    showGame();
-    pthread_create(&listenerThread, nullptr, Game::receiveLoopHelper, this);
-    controller_->captureInput(this);
-    pthread_join(listenerThread, nullptr);
-}
-
-int Game::start() {
-    view_->clearScreen();
-    srand(  // une graine différente pour chaque joueur
-        static_cast<unsigned>(time(nullptr) + getpid() +
-                              player_->getPlayerId()) *
-        273821);
-
+    srand(   // une graine différente pour chaque joueur
+        static_cast<unsigned>(
+            time(nullptr) + getpid() + player_->getPlayerId())); 
+            
     // ecoute du serveur
     pthread_create(&listenerThread, nullptr, Game::receiveLoopHelper, this);
 
-    sendStartMessage();
-    askTetraminoToServer();
+    sendSpawnTetramino(current_.shape_, current_.x_, current_.y_);
 
     controller_->captureInput(this);
     tetraminoFall();
     controller_->stop();
-    return getIsLeaving();
 }
-
-void Game::reset() {}
 
 // reçoit et traite tout ce qui vient du serveur en continu
 void* Game::receiveLoop() {
-    while (getRunning()) {
+    while (running_) {
         processServerResponse();
     }
     return nullptr;
@@ -145,13 +151,6 @@ void* Game::receiveLoop() {
 
 void* Game::receiveLoopHelper(void* arg) {
     return static_cast<Game*>(arg)->receiveLoop();
-}
-
-bool Game::getRunning() {
-    pthread_mutex_lock(&mutexStateM);
-    bool running = running_;
-    pthread_mutex_unlock(&mutexStateM);
-    return running;
 }
 
 void Game::setRunning(bool running) {
@@ -167,7 +166,7 @@ void Game::setPaused(bool paused) {
     pthread_mutex_unlock(&mutexStateM);
 }
 
-void Game::setupBoards(std::vector<int> idPlayers, bool hasGrid) {
+void Game::setupBoards(std::vector<std::uint16_t> idPlayers, bool hasGrid) {
     board_ = Board(idPlayers, hasGrid);
 }
 
@@ -177,25 +176,42 @@ void Game::sendSignalMutex() {
     pthread_mutex_unlock(&mutexStateM);
 }
 
-void Game::showGame() {
-    pthread_mutex_lock(&mutexGrid_);
-    pthread_mutex_lock(&mutexTetramino_);
-    view_->showGame(this);
-    pthread_mutex_unlock(&mutexTetramino_);
-    pthread_mutex_unlock(&mutexGrid_);
+// toDelete after real implementation
+void copyGrid(
+    std::map<std::uint16_t, std::vector<std::vector<std::uint8_t>>>& grids,
+    std::vector<std::vector<std::uint8_t>> grid) {
+    for (auto& [id, g] : grids) {
+        g = grid;
+    }
 }
 
-void Game::askTetraminoToServer() {
+void Game::sendSpawnTetramino(const std::vector<std::vector<int>>& shape, int x,
+                              int y) {
     Header header;
     header.type = MESSAGE_TYPE::GAME;
-    header.sizeMessage = sizeof(GameTypeHeader);
+    header.sizeMessage = sizeof(GameTypeHeader) + sizeof(SpawnTetraminoPayload);
 
     GameTypeHeader gameHeader;
-    gameHeader.type = GAME_TYPE::TETRAMINO_REQUEST;
+    gameHeader.type = GAME_TYPE::SPAWN_TETRAMINO;
 
-    char buffer[sizeof(Header) + sizeof(GameTypeHeader)];
+    SpawnTetraminoPayload payload{};
+    payload.x = uint8_t(x);
+    payload.y = uint8_t(y);
+    payload.width = uint8_t(shape[0].size());
+    payload.height = uint8_t(shape.size());
+
+    for (int i = 0; i < payload.height; ++i) {
+        for (int j = 0; j < payload.width; ++j) {
+            payload.shape[i][j] = uint8_t(shape[i][j]);
+        }
+    }
+
+    char buffer[sizeof(Header) + sizeof(GameTypeHeader) +
+                sizeof(SpawnTetraminoPayload)];
     memcpy(buffer, &header, sizeof(Header));
     memcpy(buffer + sizeof(Header), &gameHeader, sizeof(GameTypeHeader));
+    memcpy(buffer + sizeof(Header) + sizeof(GameTypeHeader), &payload,
+           sizeof(SpawnTetraminoPayload));
 
     server_->sendMessage(buffer, sizeof(buffer));
 }
@@ -244,15 +260,20 @@ void Game::sendRotationMessage(bool clockwise) {
     server_->sendMessage(buffer, sizeof(buffer));
 }
 
-void Game::sendMalusMessage(MalusPayload& payload) {
+/*void Game::sendMalusMessage(int malusType, int targetID) {
     Header header;
     memset(&header, 0, sizeof(Header));
     header.type = MESSAGE_TYPE::GAME;
-    header.sizeMessage = sizeof(GameTypeHeader) + sizeof(MalusPayload);
+    header.sizeMessage = sizeof(GameTypeHeader) + 2 * sizeof(int);
 
     GameTypeHeader gameHeader;
     memset(&gameHeader, 0, sizeof(GameTypeHeader));
     gameHeader.type = GAME_TYPE::MALUS;
+
+    MalusPayload payload;
+
+    payload.malusType = malusType;
+    payload.targetSocket = targetID;
 
     size_t totalSize =
         sizeof(Header) + sizeof(GameTypeHeader) + sizeof(MalusPayload);
@@ -265,17 +286,21 @@ void Game::sendMalusMessage(MalusPayload& payload) {
            sizeof(MalusPayload));
 
     server_->sendMessage(buffer, totalSize);
-}
+}*/
 
-void Game::sendBonusMessage(BonusPayload& payload) {
+/*void Game::sendBonusMessage(int bonusType) {
     Header header;
     memset(&header, 0, sizeof(Header));
     header.type = MESSAGE_TYPE::GAME;
-    header.sizeMessage = sizeof(GameTypeHeader) + sizeof(BonusPayload);
+    header.sizeMessage = sizeof(GameTypeHeader) + 2 * sizeof(int);
 
     GameTypeHeader gameHeader;
     memset(&gameHeader, 0, sizeof(GameTypeHeader));
     gameHeader.type = GAME_TYPE::BONUS;
+
+    BonusPayload payload;
+
+    payload.type = bonusType;
 
     size_t totalSize =
         sizeof(Header) + sizeof(GameTypeHeader) + sizeof(BonusPayload);
@@ -288,9 +313,8 @@ void Game::sendBonusMessage(BonusPayload& payload) {
            sizeof(BonusPayload));
 
     server_->sendMessage(buffer, totalSize);
-}
+}*/
 
-// Receives a message from the server and processes it
 void Game::processServerResponse() {
     char recvBuffer[BUFFER_SIZE];
     server_->receiveMessage(recvBuffer);
@@ -300,185 +324,72 @@ void Game::processServerResponse() {
 
     if (header.type == MESSAGE_TYPE::GAME) {
         GameTypeHeader gameHeader;
-        memcpy(&gameHeader, recvBuffer + sizeof(HeaderResponse),
-               sizeof(GameTypeHeader));
-        if (gameHeader.type == GAME_TYPE::TETRAMINO_REQUEST) {
-            handleTetramino(recvBuffer);
+        memcpy(&gameHeader, recvBuffer + sizeof(HeaderResponse), sizeof(GameTypeHeader));
 
-        } else if (gameHeader.type == GAME_TYPE::MOVE) {
-            handleMove(recvBuffer);
+        if (gameHeader.type == GAME_TYPE::MOVE) {
+            GameUpdateHeader update;
+            memcpy(&update, recvBuffer + sizeof(HeaderResponse) + sizeof(GameTypeHeader), sizeof(GameUpdateHeader));
+
+            pthread_mutex_lock(&mutexTetramino_);
+            current_.x_ = update.x;
+            current_.y_ = update.y;
+            pthread_mutex_unlock(&mutexTetramino_);
 
         } else if (gameHeader.type == GAME_TYPE::ROTATE) {
-            handleRotate(recvBuffer);
+            GameUpdateHeader update;
+            memcpy(&update, recvBuffer + sizeof(HeaderResponse) + sizeof(GameTypeHeader), sizeof(GameUpdateHeader));
+
+            pthread_mutex_lock(&mutexTetramino_);
+            current_.shape_ = rotate(current_.shape_, update.rotation);
+            pthread_mutex_unlock(&mutexTetramino_);
 
         } else if (gameHeader.type == GAME_TYPE::LOCK) {
-            handleLock(recvBuffer);
-            return;
+            GameUpdateHeader update;
+            memcpy(&update, recvBuffer + sizeof(HeaderResponse) + sizeof(GameTypeHeader), sizeof(GameUpdateHeader));
 
+            lockPending_ = true;
+            pthread_mutex_lock(&mutexGrid_);
+    
+            newBoard();
+            clearFullRows(update);
+    
+            pthread_mutex_unlock(&mutexGrid_);
+    
+            // on passe au suivant
+            pthread_mutex_lock(&mutexTetramino_);
+            current_ = generateRandomTetramino();
+            sendSpawnTetramino(current_.shape_, current_.x_, current_.y_);
+            lockPending_ = false;
+            pthread_mutex_unlock(&mutexTetramino_);
+            return;
+            
         } else if (gameHeader.type == GAME_TYPE::UPDATEGRID) {
-            handleUpdateGrid(recvBuffer);
+            GridUpdate updateGrid;
+            memcpy(&updateGrid, recvBuffer + sizeof(HeaderResponse) + sizeof(GameTypeHeader), sizeof(GridUpdate));
+
+            if (updateGrid.playerID != player_->getPlayerId()) {
+                pthread_mutex_lock(&mutexGrid_);
+                board_.getBoards()[static_cast<std::uint16_t>(updateGrid.playerID)] = convertGrid(updateGrid.grid);
+                pthread_mutex_unlock(&mutexGrid_);
+            }
 
         } else if (gameHeader.type == GAME_TYPE::MALUS) {
-            handleMalus(recvBuffer);
+            MalusPayload payload;
+            memcpy(&payload, recvBuffer + sizeof(HeaderResponse) + sizeof(GameTypeHeader), sizeof(MalusPayload));
 
-        } else if (gameHeader.type == GAME_TYPE::LOST ||
-                   gameHeader.type == GAME_TYPE::WIN ||
-                   gameHeader.type == GAME_TYPE::END) {
-            handleEnd(gameHeader);
-            return;
+            applyMalus(payload);
 
-        } else if (gameHeader.type == GAME_TYPE::MALUS_AUTHORISATION) {
-            handleMalusAuthorisation();
+        } else if (gameHeader.type == GAME_TYPE::LOST || gameHeader.type == GAME_TYPE::WIN) {
+            running_ = false;
 
-        } else if (gameHeader.type == GAME_TYPE::BONUS_AUTHORISATION) {
-            handleBonusAuthorisation();
+            bool won = (gameHeader.type == GAME_TYPE::WIN);
+            view_->showEndScreen(won);
         }
-        showGame();
-    }
-}
 
-void Game::handleTetramino(char* recvBuffer) {
-    pthread_mutex_lock(&mutexTetramino_);
-
-    SpawnTetraminoPayload payload;
-    memcpy(&payload,
-           recvBuffer + sizeof(HeaderResponse) + sizeof(GameTypeHeader),
-           sizeof(SpawnTetraminoPayload));
-
-    current_.x_ = payload.x;
-    current_.y_ = payload.y;
-    current_.colorIndex_ = payload.color;
-
-    current_.shape_.clear();
-    for (int i = 0; i < payload.height; ++i) {
-        std::vector<int> row;
-        for (int j = 0; j < payload.width; ++j) {
-            row.push_back(payload.shape[i][j]);
-        }
-        current_.shape_.push_back(row);
-    }
-
-    pthread_mutex_unlock(&mutexTetramino_);
-}
-
-void Game::handleMove(char* recvBuffer) {
-    GameUpdateHeader update;
-    memcpy(&update,
-           recvBuffer + sizeof(HeaderResponse) + sizeof(GameTypeHeader),
-           sizeof(GameUpdateHeader));
-
-    pthread_mutex_lock(&mutexTetramino_);
-    current_.x_ = update.x;
-    current_.y_ = update.y;
-    pthread_mutex_unlock(&mutexTetramino_);
-}
-
-void Game::handleRotate(char* recvBuffer) {
-    GameUpdateHeader update;
-    memcpy(&update,
-           recvBuffer + sizeof(HeaderResponse) + sizeof(GameTypeHeader),
-           sizeof(GameUpdateHeader));
-
-    pthread_mutex_lock(&mutexTetramino_);
-    current_.shape_ = rotate(current_.shape_, update.rotation);
-    current_.x_ = update.x;
-    current_.y_ = update.y;
-    pthread_mutex_unlock(&mutexTetramino_);
-}
-
-void Game::handleLock(char* recvBuffer) {
-    if (isInputBlocked()) {
-        std::string malus = "Commandes bloquées!";
-        unblockInput();
-        removeActiveMalus(malus);
-    }
-
-    if (isInvCMD()) {
-        std::string malus = "Commandes inversées!";
-        invCMDCount_--;
-        if (invCMDCount_ == 0) removeActiveMalus(malus);
-    }
-
-    GameUpdateHeader update;
-    memcpy(&update,
-           recvBuffer + sizeof(HeaderResponse) + sizeof(GameTypeHeader),
-           sizeof(GameUpdateHeader));
-
-    lockPending_ = true;
-    pthread_mutex_lock(&mutexGrid_);
-
-    newBoard();
-    clearFullRows(update);
-
-    pthread_mutex_unlock(&mutexGrid_);
-
-    // on passe au suivant
-    pthread_mutex_lock(&mutexTetramino_);
-    askTetraminoToServer();
-    lockPending_ = false;
-    pthread_mutex_unlock(&mutexTetramino_);
-}
-
-void Game::handleUpdateGrid(char* recvBuffer) {
-    GridUpdate updateGrid;
-    memcpy(&updateGrid,
-           recvBuffer + sizeof(HeaderResponse) + sizeof(GameTypeHeader),
-           sizeof(GridUpdate));
-
-    // Handle the grid update for the player who is not the current player
-    if (updateGrid.playerID != player_->getPlayerId()) {
-        pthread_mutex_lock(&mutexGrid_);
-
-        std::string cleanUsername(updateGrid.username,
-                                  strnlen(updateGrid.username, 32));
-        setPlayerName(updateGrid.playerID, cleanUsername);
-
-        board_.getBoards()[updateGrid.playerID] = convertGrid(updateGrid.grid);
-
+        pthread_mutex_lock(&mutexGrid_);  
+        view_->showGame(this);
         pthread_mutex_unlock(&mutexGrid_);
     }
-}
-
-void Game::handleMalus(char* recvBuffer) {
-    MalusPayload payload;
-    memcpy(&payload,
-           recvBuffer + sizeof(HeaderResponse) + sizeof(GameTypeHeader),
-           sizeof(MalusPayload));
-
-    applyMalus(payload);
-}
-
-void Game::handleEnd(GameTypeHeader& gameHeader) {
-    setRunning(false);
-    bool won = (gameHeader.type == GAME_TYPE::WIN);
-    view_->showEndScreen(won);
-}
-
-void Game::handleMalusAuthorisation() {
-    setPaused(true);
-    int malusTypeToSent = view_->showMalusType();
-    int targetID = view_->showMalusTarget(this);
-    setPaused(false);
-
-    MalusPayload payload;
-    payload.malusType = malusTypeToSent;
-    payload.target = targetID;
-
-    sendMalusMessage(payload);
-    setControllerWait(false);
-}
-
-void Game::handleBonusAuthorisation() {
-    setPaused(true);
-    int bonusTypeToApply = view_->showBonusType();
-    setPaused(false);
-
-    BonusPayload payload;
-    payload.type = bonusTypeToApply;
-
-    applyBonus(payload);
-    sendBonusMessage(payload);
-    setControllerWait(false);
 }
 
 std::vector<std::vector<int>> Game::rotate(
@@ -492,7 +403,7 @@ std::vector<std::vector<int>> Game::rotate(
             if (clockwise) {
                 rotated[j][rows - 1 - i] = shape[i][j];
             } else {
-                rotated[cols - 1 - j][i] = shape[i][j];
+                rotated[j][cols - 1 - i] = shape[i][j];
             }
         }
     }
@@ -515,195 +426,112 @@ void Game::newBoard() {
     }
 }
 
-std::vector<std::vector<std::uint8_t>> Game::convertGrid(
-    uint8_t raw[HEIGHT][WIDTH]) {
-    std::vector<std::vector<std::uint8_t>> result(
-        HEIGHT, std::vector<std::uint8_t>(WIDTH));
+std::vector<std::vector<std::uint8_t>> Game::convertGrid(uint8_t raw[HEIGHT][WIDTH]) {
+    std::vector<std::vector<std::uint8_t>> result(HEIGHT, std::vector<std::uint8_t>(WIDTH));
     for (int i = 0; i < HEIGHT; ++i)
-        for (int j = 0; j < WIDTH; ++j) result[i][j] = raw[i][j];
+        for (int j = 0; j < WIDTH; ++j)
+            result[i][j] = raw[i][j];
     return result;
 }
 
+/*void Game::receiveMalus() {
+    char buffer[sizeof(MalusPayload)];
+
+    if (server_->receiveMessage(buffer) != 0) {
+        std::cerr << "[CLIENT] Erreur lors de la réception du malus."
+                  << std::endl;
+        return;
+    }
+
+    MalusPayload payload;
+
+    memcpy(&payload, buffer, sizeof(MalusPayload));
+
+    applyMalus(payload);  // Appliquer immédiatement le malus
+}*/
+
 void Game::applyMalus(MalusPayload& payload) {
     int malusType = payload.malusType;
-    std::string malus = "";
 
     switch (malusType) {
-        case 1:  // Ajout d'une ligne grise
-            addMalusRow(payload);
-            break;
-
-        case 2:  // Bloquer les commandes pour le prochain bloc
-            blockedInput_ = true;
-            malus = "Commandes bloquées!";
-            break;
-
-        case 3:  // inverser les commandes
-            invCMDCount_ = 3;
-            malus = "Commandes inversées!";
-            break;
-
-        case 4:               // accélération du tetramino
-            setSpeedDown(0);  // au cas ou il avait ce bonus
-            setSpeedUp(true);
-            malus = "Accélération!!!";
-            break;
-
-        case 5:  // écran noir
-            blackScreenStart = std::chrono::steady_clock::now();
-            blackScreenSec = 5;
-            malus = "Extinction des feux!";
-            break;
-
-        default:
-            std::cerr << "Malus inconnu reçu." << std::endl;
-            break;
-    }
-
-    if (malus != "") addActiveMalus(malus);
-}
-
-// Ajout d'une ligne Malus
-void Game::addMalusRow(MalusPayload& payload) {
-    int lines = payload.details;
-    auto& grid = board_.getGrid();
-
-    // choisir l'endroit du trou
-    int emptyIdx = payload.emptyIdx;
-
-    for (int l = 0; l < lines; ++l) {
-        // supprimer la ligne du haut
-        grid.erase(grid.begin());
-
-        // créer une ligne de malus gris avec un seul trou
-        std::vector<std::uint8_t> malusRow(WIDTH, 9);
-        malusRow[emptyIdx] = 0;
-
-        grid.push_back(malusRow);
-    }
-}
-
-bool Game::isBlackScreen() {
-    if (blackScreenSec == 0) return false;
-
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed =
-        std::chrono::duration_cast<std::chrono::seconds>(now - blackScreenStart)
-            .count();
-
-    if (elapsed >= blackScreenSec) {
-        std::string malus = "Extinction des feux!";
-        removeActiveMalus(malus);
-        blackScreenSec = 0;
-        return false;
-    }
-
-    return true;
-}
-
-void Game::applyBonus(BonusPayload& payload) {
-    int type = payload.type;
-
-    switch (type) {
-        case 1:  // Lotterie
-            addLuckyPoints(payload);
-            break;
-
-        case 2: {               // ralentir
-            setSpeedUp(false);  // au cas ou le joueur avait ce malus
-            std::string malus = "Accélération!!!";
-            removeActiveMalus(malus);
-            speedDownStart = std::chrono::steady_clock::now();
-            setSpeedDown(5);
+        case 1:  {    // Ajout d'une ligne grise
+            int lines = payload.details;
+            addMalusRow(lines);
+            sendConfirmMalus(payload);
             break;
         }
-
-        case 3:  // petit tetramino
+        case 2:       // Bloquer les commandes pour le prochain bloc
+            blockedInput_ = true;
             break;
-
+        case 3:
+            break;
+        // etc
         default:
-            std::cerr << "Bonus inconnu reçu." << std::endl;
+            std::cerr << "[CLIENT] Malus inconnu reçu." << std::endl;
             break;
+    }
+
+    // Mettre à jour l'affichage apres maus
+    pthread_mutex_lock(&mutexGrid_);
+    view_->showGame(this);
+    pthread_mutex_unlock(&mutexGrid_);
+}
+
+/*void Game::applyBonus(int type) {
+    switch (type) {
+        case 1:
+            addLuckyPoints();
+            break;
+        case 2:
+            break;
+        // etc
+        default:
+            std::cerr << "[CLIENT] Bonus inconnu reçu." << std::endl;
+            break;
+    }
+}*/
+
+// Ajout d'une ligne Malus
+void Game::addMalusRow(int lines) {
+    auto& grid = board_.getGrid();
+
+    for (int l = 0; l < lines; ++l) {
+        // supprimer la première ligne
+        grid.erase(grid.begin());
+        grid.push_back(std::vector<std::uint8_t> (WIDTH, 9));
     }
 }
 
-void Game::addLuckyPoints(BonusPayload& payload) {
+/*void Game::addLuckyPoints() {
     int prob = rand() % 100;
-    std::string msg;
 
     if (prob < 60) {  // 60% de chance de gagner 0 point
-        payload.details = 0;
-
+        view_->showMessage("Bonus : Pas de chance, 0 point gagné !", 0);
     } else if (prob < 90) {  // 30% de chance de gagner 100 point
         points_ += 100;
-        payload.details = 100;
-
+        view_->showMessage("Bonus : Vous gagnez 100 points !", 0);
     } else {  // 10% de chance de gagner 1000 point
         points_ += 1000;
-        payload.details = 1000;
+        view_->showMessage("Bonus : Jackpot ! Vous gagnez 1000 points !", 0);
     }
-}
+}*/
 
-bool Game::isSpeedDown() {
-    if (speedDownSec == 0) return false;
-
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed =
-        std::chrono::duration_cast<std::chrono::seconds>(now - speedDownStart)
-            .count();
-
-    return elapsed < speedDownSec;
-}
-
-void Game::askRoyalPermission(std::string type) {
+void Game::sendConfirmMalus(MalusPayload& malus) {
     Header header;
     memset(&header, 0, sizeof(Header));
     header.type = MESSAGE_TYPE::GAME;
-    header.sizeMessage = sizeof(GameTypeHeader);
+    header.sizeMessage = sizeof(GameTypeHeader) + sizeof(MalusPayload);
 
     GameTypeHeader gameHeader;
     memset(&gameHeader, 0, sizeof(GameTypeHeader));
-    if (type == "MALUS") {
-        gameHeader.type = GAME_TYPE::MALUS_AUTHORISATION;
-    } else {
-        gameHeader.type = GAME_TYPE::BONUS_AUTHORISATION;
-    }
+    gameHeader.type = GAME_TYPE::MALUS_CONFIRM;
 
-    char buffer[sizeof(Header) + sizeof(GameTypeHeader)];
+    char buffer[sizeof(Header) + sizeof(GameTypeHeader) +
+                sizeof(MalusPayload)];
     memcpy(buffer, &header, sizeof(Header));
     memcpy(buffer + sizeof(Header), &gameHeader, sizeof(GameTypeHeader));
-
-    server_->sendMessage(buffer, sizeof(buffer));
-    setControllerWait(true);
-    if (energy > 0) energy--;
-}
-
-void Game::sendQuitParty() {
-    Header header;
-    header.type = MESSAGE_TYPE::GAME;
-    header.sizeMessage = sizeof(GameTypeHeader);
-
-    GameTypeHeader gameHeader;
-    gameHeader.type = GAME_TYPE::END;
-
-    char buffer[sizeof(Header) + sizeof(GameTypeHeader)];
-    memcpy(buffer, &header, sizeof(Header));
-    memcpy(buffer + sizeof(Header), &gameHeader, sizeof(GameTypeHeader));
-
-    server_->sendMessage(buffer, sizeof(Header) + sizeof(GameTypeHeader));
-}
-
-void Game::sendStartMessage() {
-    Header header;
-    header.type = MESSAGE_TYPE::GAME;
-    header.sizeMessage = sizeof(GameTypeHeader);
-
-    GameTypeHeader gameHeader;
-    gameHeader.type = GAME_TYPE::START;
-
-    char buffer[sizeof(Header) + sizeof(GameTypeHeader)];
-    memcpy(buffer, &header, sizeof(Header));
-    memcpy(buffer + sizeof(Header), &gameHeader, sizeof(GameTypeHeader));
+    memcpy(buffer + sizeof(Header) + sizeof(GameTypeHeader), &malus,
+           sizeof(MalusPayload));
 
     server_->sendMessage(buffer, sizeof(buffer));
 }

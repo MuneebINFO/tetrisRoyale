@@ -1,8 +1,8 @@
 #include "Message.h"
 
-#include "View.h"
 #include "Player.h"
 #include "Server.h"
+#include "View.h"
 
 AccountResponseHeader Message::fromBuffer(char* buffer) {
     AccountResponseHeader accountResponseHeader;
@@ -39,21 +39,16 @@ void Message::serializeLobby(LOBBY_TYPE type, Lobby& lobby, char* buffer) {
     lobbyHeader.type = type;
     lobbyHeader.idRoom = lobby.getRoomId();
     lobbyHeader.nbPlayers = lobby.getNumberOfPlayer();
-
     memcpy(lobbyHeader.gameMode, lobby.getGameMode().c_str(),
            lobby.getGameMode().size());
-    lobbyHeader.gameMode[lobby.getGameMode().size()] = '\0';
     memcpy(buffer + sizeof(Header), &lobbyHeader, sizeof(LobbyHeader));
     switch (type) {
         case LOBBY_TYPE::INVITE:
             header.sizeMessage =
                 sizeof(LobbyHeader) + sizeof(LobbyInviteFriend);
-            break;
-        case LOBBY_TYPE::JOIN:
-            header.sizeMessage += sizeof(LobbyJoinning);
-            break;
         case LOBBY_TYPE::CREATE:
         case LOBBY_TYPE::MODIFY:
+        case LOBBY_TYPE::JOIN:
         case LOBBY_TYPE::LEAVE:
         case LOBBY_TYPE::START:
         default:
@@ -81,8 +76,7 @@ void Message::serializeSocialGetLobbyInvite(SOCIAL_TYPE type,
 
 LobbyMessage::LobbyMessage(std::shared_ptr<Server> server) : server_(server) {}
 
-// process the server messages
-void LobbyMessage::handleWaitingRoom(Lobby* lobby, bool& running) {
+void LobbyMessage::handleWaitingRoom(Lobby& lobby, bool& running) {
     char buffer[BUFFER_SIZE];
     server_->receiveMessage(buffer);
     HeaderResponse response;
@@ -92,38 +86,32 @@ void LobbyMessage::handleWaitingRoom(Lobby* lobby, bool& running) {
            sizeof(LobbyResponseHeader));
     if (responseHeader.responseType == LOBBY_RESPONSE::END) {
         running = false;
-    } else if (responseHeader.responseType == LOBBY_RESPONSE::UPDATE) {
-        handleUPDATE(lobby, buffer);
-    } else if (responseHeader.responseType == LOBBY_RESPONSE::UPDATE_PLAYER) {
-        handleUPDATE_PLAYER(lobby, buffer);
-    } else if (responseHeader.responseType == LOBBY_RESPONSE::STARTED) {
-        lobby->startGame();
-        running = false;
-    } else if (responseHeader.responseType == LOBBY_RESPONSE::ERROR) {
-        handleError(lobby, buffer);
     }
-    // Handle incoming invite
-    else if (responseHeader.responseType == LOBBY_RESPONSE::INVITE_RECEIVED) {
-        LobbyInvitation invitation;
-        memcpy(&invitation,
-               buffer + sizeof(HeaderResponse) + sizeof(LobbyResponseHeader),
-               sizeof(LobbyInvitation));
+    if (responseHeader.responseType == LOBBY_RESPONSE::UPDATE) {
+        handleUPDATE(lobby, buffer);
+    }
+    if (responseHeader.responseType == LOBBY_RESPONSE::UPDATE_PLAYER) {
+        handleUPDATE_PLAYER(lobby, buffer);
+    }
+    if (responseHeader.responseType == LOBBY_RESPONSE::STARTED) {
+        lobby.startGame();
+    }
+    if (responseHeader.responseType == LOBBY_RESPONSE::ERROR) {
+        handleError(lobby, buffer);
     }
 }
 
-// Handle the settings changes
-void LobbyMessage::handleUPDATE(Lobby* lobby, char* buffer) {
+void LobbyMessage::handleUPDATE(Lobby& lobby, char* buffer) {
     LobbyUpdate lobbyUpdate;
     memcpy(&lobbyUpdate,
            buffer + sizeof(HeaderResponse) + sizeof(LobbyResponseHeader),
            sizeof(LobbyUpdate));
-    lobby->setGameMode(std::string(lobbyUpdate.gameMode, MAX_NAME_LENGTH));
+    lobby.setGameMode(std::string(lobbyUpdate.gameMode));
     int nbrPlayer = static_cast<int>(lobbyUpdate.nbGamerMax);
-    lobby->setNumberOfPlayer(nbrPlayer);
+    lobby.setNumberOfPlayer(nbrPlayer);
 }
 
-// Handle the entry and exit of players
-void LobbyMessage::handleUPDATE_PLAYER(Lobby* lobby, char* buffer) {
+void LobbyMessage::handleUPDATE_PLAYER(Lobby& lobby, char* buffer) {
     LobbyUpdatePlayer lobbyUpdatePlayer;
     memcpy(&lobbyUpdatePlayer,
            buffer + sizeof(HeaderResponse) + sizeof(LobbyResponseHeader),
@@ -136,14 +124,14 @@ void LobbyMessage::handleUPDATE_PLAYER(Lobby* lobby, char* buffer) {
                    (sizeof(LobbyUpdatePlayerList) * i),
                sizeof(LobbyUpdatePlayerList));
         if (lUPL.added) {
-            lobby->addPlayer(lUPL.idPlayer, lUPL.name, lUPL.asGamer);
+            lobby.addPlayer(lUPL.idPlayer, lUPL.name, lUPL.asGamer);
         } else {
-            lobby->removePlayer(lUPL.idPlayer, lUPL.asGamer);
+            lobby.removePlayer(lUPL.idPlayer, lUPL.asGamer);
         }
     }
 }
 
-void LobbyMessage::handleError(Lobby* lobby, char* buffer) {
+void LobbyMessage::handleError(Lobby& lobby, char* buffer) {
     LobbyErrorResponse lobbyErrorResponse;
     memcpy(&lobbyErrorResponse,
            buffer + sizeof(HeaderResponse) + sizeof(LobbyResponseHeader),
@@ -153,6 +141,6 @@ void LobbyMessage::handleError(Lobby* lobby, char* buffer) {
            buffer + sizeof(HeaderResponse) + sizeof(LobbyResponseHeader) +
                sizeof(LobbyErrorResponse),
            lobbyErrorResponse.sizeMessage);
-    lobby->getView()->setErrorMessage(
+    lobby.getView()->setErrorMessage(
         std::string(message, lobbyErrorResponse.sizeMessage));
 }
