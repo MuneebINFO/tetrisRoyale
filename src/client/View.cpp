@@ -89,19 +89,71 @@ void ViewCLI::setupNcurses() {
     }
 }
 
-void ViewCLI::showEndScreen(bool won) {
-    clear();  // nettoie l'écran ncurses
-    int centerY = LINES / 2;
-    int centerX = COLS / 2 - 10;
 
-    if (won) {
-        mvprintw(centerY, centerX, "YOU WIN!");
-    } else {
-        mvprintw(centerY, centerX, "GAME OVER");
+void ViewCLI::showEndScreen(bool won) {
+    clear();
+    nodelay(stdscr, FALSE);   // getch bloquant
+    keypad(stdscr, TRUE);
+    curs_set(0);
+
+    const char* title = won ? "YOU WIN!" : "GAME OVER";
+    const char* subtitle = "Press any key to exit...";
+
+    // Dimensions "carte"
+    int boxW = 44;
+    int boxH = 9;
+
+    if (boxW > COLS - 2) boxW = COLS - 2;
+    if (boxH > LINES - 2) boxH = LINES - 2;
+
+    int startY = (LINES - boxH) / 2;
+    int startX = (COLS - boxW) / 2;
+
+    // Ombre légère (si ça rentre)
+    if (startY + boxH < LINES && startX + boxW < COLS) {
+        attron(A_DIM);
+        for (int y = 1; y <= boxH; ++y) {
+            if (startY + y >= 0 && startY + y < LINES && startX + boxW < COLS)
+                mvaddch(startY + y, startX + boxW, ' ');
+        }
+        for (int x = 1; x <= boxW; ++x) {
+            if (startY + boxH < LINES && startX + x >= 0 && startX + x < COLS)
+                mvaddch(startY + boxH, startX + x, ' ');
+        }
+        attroff(A_DIM);
     }
 
-    mvprintw(centerY + 2, centerX - 5, "Press any key to exit...");
+    // Bordure
+    mvaddch(startY, startX, ACS_ULCORNER);
+    for (int i = 1; i < boxW - 1; ++i) mvaddch(startY, startX + i, ACS_HLINE);
+    mvaddch(startY, startX + boxW - 1, ACS_URCORNER);
+
+    for (int i = 1; i < boxH - 1; ++i) {
+        mvaddch(startY + i, startX, ACS_VLINE);
+        for (int j = 1; j < boxW - 1; ++j) mvaddch(startY + i, startX + j, ' ');
+        mvaddch(startY + i, startX + boxW - 1, ACS_VLINE);
+    }
+
+    mvaddch(startY + boxH - 1, startX, ACS_LLCORNER);
+    for (int i = 1; i < boxW - 1; ++i) mvaddch(startY + boxH - 1, startX + i, ACS_HLINE);
+    mvaddch(startY + boxH - 1, startX + boxW - 1, ACS_LRCORNER);
+
+    // Texte centré
+    int titleY = startY + 3;
+    int titleX = startX + (boxW - (int)std::strlen(title)) / 2;
+    int subY   = startY + 5;
+    int subX   = startX + (boxW - (int)std::strlen(subtitle)) / 2;
+
+    attron(A_BOLD);
+    mvprintw(titleY, titleX, "%s", title);
+    attroff(A_BOLD);
+
+    attron(A_DIM);
+    mvprintw(subY, subX, "%s", subtitle);
+    attroff(A_DIM);
+
     refresh();
+    getch();
 }
 
 void ViewCLI::showBoards(Game* game) {
@@ -230,8 +282,6 @@ void ViewCLI::showGame(Game* game) {
     }
     showBoards(game);
     refresh();
-    // wnoutrefresh(stdscr);
-    // doupdate();
 }
 
 // show the menu for inviting a friend to the party
@@ -371,28 +421,129 @@ void ViewCLI::showOptionInviteFriend(LobbyInviteFriend& lobbyFriend) {
 
 ACCOUNT_STATE ViewCLI::showAccountConnection() {
     Signal& signal = Signal::getInstance();
-    clear();
+
     noecho();
+    curs_set(0);
+
     WINDOW* win = getWinMenu();
-    box(win, 0, 0);
+    const int h = getmaxy(win);
+    const int w = getmaxx(win);
 
-    mvwprintw(win, 2, 2, "s - Se connecter");
-    mvwprintw(win, 3, 2, "c - Créer un compte");
+    const char* gameTitle1 = "TETRIS ROYALE";
+    const char* gameTitle2 = "MULTIJOUEUR";
 
-    char choice;
-    do {
-        choice = static_cast<char>(wgetch(win));
-    } while (choice != 's' && choice != 'c' && choice != 'q' and
-             signal.getSigIntFlag() == 0);
+    auto centerX = [&](const char* s) {
+        int x = (w - (int)std::strlen(s)) / 2;
+        return (x < 0) ? 0 : x;
+    };
 
-    switch (choice) {
-        case 's':
-            return ACCOUNT_STATE::LOGIN;
-        case 'c':
-            return ACCOUNT_STATE::SIGNUP;
-        default:
+    // On dessine tout dans redraw(), mais on a besoin de ces labels ici
+    const char* title = "Compte";
+
+    // Menu options
+    const char* items[] = {"CONNEXION", "INSCRIPTION"};
+    constexpr int itemCount = 2;
+    int selected = 0;
+
+    auto drawCentered = [&](int y, const char* txt, bool highlight) {
+        int x = (w - (int)std::strlen(txt)) / 2;
+        if (x < 2) x = 2;
+
+        if (highlight) {
+            wattron(win, COLOR_PAIR(10) | A_BOLD);
+            mvwprintw(win, y, x, "%s", txt);
+            wattroff(win, COLOR_PAIR(10) | A_BOLD);
+        } else {
+            wattron(win, A_BOLD);
+            mvwprintw(win, y, x, "%s", txt);
+            wattroff(win, A_BOLD);
+        }
+    };
+
+    auto redraw = [&]() {
+        werase(win);
+
+        // --- Titre du jeu (tout en haut, au-dessus du cadre) ---
+        // Ligne 0 et 1 réservées au titre
+        wattron(win, A_BOLD);
+        mvwprintw(win, 0, centerX(gameTitle1), "%s", gameTitle1);
+        mvwprintw(win, 1, centerX(gameTitle2), "%s", gameTitle2);
+        wattroff(win, A_BOLD);
+
+        // --- Cadre principal (en dessous du titre) ---
+        // On dessine un cadre "interne" à partir de y=3 pour laisser le titre respirer
+        int frameTop = 3;
+        int frameLeft = 0;
+        int frameRight = w - 1;
+        int frameBottom = h - 1;
+
+        // Coins
+        mvwaddch(win, frameTop, frameLeft, ACS_ULCORNER);
+        mvwaddch(win, frameTop, frameRight, ACS_URCORNER);
+        mvwaddch(win, frameBottom, frameLeft, ACS_LLCORNER);
+        mvwaddch(win, frameBottom, frameRight, ACS_LRCORNER);
+
+        // Lignes horizontales
+        for (int x = frameLeft + 1; x < frameRight; ++x) {
+            mvwaddch(win, frameTop, x, ACS_HLINE);
+            mvwaddch(win, frameBottom, x, ACS_HLINE);
+        }
+        // Lignes verticales
+        for (int y = frameTop + 1; y < frameBottom; ++y) {
+            mvwaddch(win, y, frameLeft, ACS_VLINE);
+            mvwaddch(win, y, frameRight, ACS_VLINE);
+        }
+
+        // --- Titre de page (dans le cadre) ---
+        const int titleY = frameTop + 1;
+        const int titleX = (w - (int)std::strlen(title)) / 2;
+
+        wattron(win, A_BOLD);
+        mvwprintw(win, titleY, std::max(2, titleX), "%s", title);
+        wattroff(win, A_BOLD);
+
+        // Séparateur sous le titre
+        const int sepY = titleY + 2;
+        for (int x = 2; x < w - 2; ++x) mvwaddch(win, sepY, x, ACS_HLINE);
+
+        // --- Options au milieu (dans le cadre) ---
+        int baseY = (frameTop + frameBottom) / 2 - 1;
+        drawCentered(baseY + 0, items[0], selected == 0);
+        drawCentered(baseY + 2, items[1], selected == 1);
+
+        // --- Hint ---
+        wattron(win, A_DIM);
+        mvwprintw(win, frameBottom - 2, 2, "z/s : naviguer | Entrer : choisir");
+        wattroff(win, A_DIM);
+
+        wrefresh(win);
+    };
+
+    keypad(win, TRUE);
+    redraw();
+
+    while (signal.getSigIntFlag() == 0) {
+        int ch = wgetch(win);
+
+        if (ch == 'q') {
             return ACCOUNT_STATE::ACCOUNT;
+        }
+        if (ch == 's' || ch == KEY_DOWN) {
+            selected = (selected + 1) % itemCount;
+            redraw();
+            continue;
+        }
+        if (ch == 'z' || ch == KEY_UP) {
+            selected = (selected - 1 + itemCount) % itemCount;
+            redraw();
+            continue;
+        }
+        if (ch == '\n' || ch == KEY_ENTER || ch == 10 || ch == 13) {
+            return (selected == 0) ? ACCOUNT_STATE::LOGIN : ACCOUNT_STATE::SIGNUP;
+        }
     }
+
+    return ACCOUNT_STATE::ACCOUNT;
 }
 
 void ViewCLI::showLogin() {
@@ -404,13 +555,63 @@ void ViewCLI::showLogin() {
     curs_set(1);
 
     box(win, 0, 0);
-    mvwprintw(win, 0, 2, "CONNEXION");
-    mvwprintw(win, 2, 2, "Nom d'utilisateur: ");
-    mvwprintw(win, 3, 2, "Mot de passe: ");
-    refreshScreen();
 
+    const int h = getmaxy(win);
+    const int w = getmaxx(win);
+
+    // Titre centré
+    const char* title = "Connexion";
+    int titleX = (w - (int)std::strlen(title)) / 2;
+    if (titleX < 2) titleX = 2;
+
+    wattron(win, A_BOLD);
+    mvwprintw(win, 2, titleX, "%s", title);
+    wattroff(win, A_BOLD);
+
+    // Deux "input boxes" centrées
+    const int boxW = std::min(46, w - 10);
+    const int boxH = 3;
+
+    int startX = (w - boxW) / 2;
+    int userY  = h / 2 - 4;
+    int passY  = h / 2;
+
+    loginUserBox_ = { userY + 1, startX + 2, boxW - 4 };
+    loginPassBox_ = { passY + 1, startX + 2, boxW - 4 };
+
+    auto drawInputBox = [&](int topY, const char* label) {
+        // label centré au-dessus
+        int lx = (w - (int)std::strlen(label)) / 2;
+        mvwprintw(win, topY - 1, std::max(2, lx), "%s", label);
+
+        // rectangle
+        mvwaddch(win, topY, startX, ACS_ULCORNER);
+        mvwaddch(win, topY, startX + boxW - 1, ACS_URCORNER);
+        mvwaddch(win, topY + boxH - 1, startX, ACS_LLCORNER);
+        mvwaddch(win, topY + boxH - 1, startX + boxW - 1, ACS_LRCORNER);
+
+        for (int x = 1; x < boxW - 1; ++x) {
+            mvwaddch(win, topY, startX + x, ACS_HLINE);
+            mvwaddch(win, topY + boxH - 1, startX + x, ACS_HLINE);
+        }
+        for (int y = 1; y < boxH - 1; ++y) {
+            mvwaddch(win, topY + y, startX, ACS_VLINE);
+            mvwaddch(win, topY + y, startX + boxW - 1, ACS_VLINE);
+        }
+
+        // zone intérieure vide
+        for (int x = 1; x < boxW - 1; ++x) mvwaddch(win, topY + 1, startX + x, ' ');
+    };
+
+    drawInputBox(userY, "Nom d'utilisateur");
+    drawInputBox(passY, "Mot de passe");
+
+    wattron(win, A_DIM);
+    mvwprintw(win, h - 3, 2, "Entrer : valider");
+    wattroff(win, A_DIM);
+
+    refreshScreen();
     wnoutrefresh(win);
-    return;
 }
 
 void ViewCLI::showSignUp() {
@@ -422,23 +623,67 @@ void ViewCLI::showSignUp() {
     curs_set(1);
 
     box(win, 0, 0);
-    mvwprintw(win, 0, 2, "INSCRIPTION");
-    mvwprintw(win, 2, 2, "Nom d'utilisateur: ");
-    mvwprintw(win, 3, 2, "Mot de passe: ");
-    refreshScreen();
 
+    const int h = getmaxy(win);
+    const int w = getmaxx(win);
+
+    // Titre centré
+    const char* title = "Inscription";
+    int titleX = (w - (int)std::strlen(title)) / 2;
+    if (titleX < 2) titleX = 2;
+
+    wattron(win, A_BOLD);
+    mvwprintw(win, 2, titleX, "%s", title);
+    wattroff(win, A_BOLD);
+
+    // Deux "input boxes" centrées
+    const int boxW = std::min(46, w - 10);
+    const int boxH = 3;
+
+    int startX = (w - boxW) / 2;
+    int userY  = h / 2 - 4;
+    int passY  = h / 2;
+
+    auto drawInputBox = [&](int topY, const char* label) {
+        int lx = (w - (int)std::strlen(label)) / 2;
+        mvwprintw(win, topY - 1, std::max(2, lx), "%s", label);
+
+        mvwaddch(win, topY, startX, ACS_ULCORNER);
+        mvwaddch(win, topY, startX + boxW - 1, ACS_URCORNER);
+        mvwaddch(win, topY + boxH - 1, startX, ACS_LLCORNER);
+        mvwaddch(win, topY + boxH - 1, startX + boxW - 1, ACS_LRCORNER);
+
+        for (int x = 1; x < boxW - 1; ++x) {
+            mvwaddch(win, topY, startX + x, ACS_HLINE);
+            mvwaddch(win, topY + boxH - 1, startX + x, ACS_HLINE);
+        }
+        for (int y = 1; y < boxH - 1; ++y) {
+            mvwaddch(win, topY + y, startX, ACS_VLINE);
+            mvwaddch(win, topY + y, startX + boxW - 1, ACS_VLINE);
+        }
+
+        for (int x = 1; x < boxW - 1; ++x) mvwaddch(win, topY + 1, startX + x, ' ');
+    };
+
+    drawInputBox(userY, "Nom d'utilisateur");
+    drawInputBox(passY, "Mot de passe");
+
+    wattron(win, A_DIM);
+    mvwprintw(win, h - 3, 2, "Entrer : creer le compte");
+    wattroff(win, A_DIM);
+
+    refreshScreen();
     wnoutrefresh(win);
-    return;
 }
 
 void ViewCLI::showMenu(MENU_STATE menu) {
     switch (menu) {
         case MENU_STATE::MAIN: {
-            showMainMenu();
+            showMainMenu(0);
             break;
         }
         case MENU_STATE::LOBBY: {
-            showMenuLobby();
+            showLobbyModify();
             break;
         }
         case MENU_STATE::GAME: {
@@ -461,7 +706,6 @@ void ViewCLI::showMenu(MENU_STATE menu) {
     }
 }
 
-void ViewCLI::showMenuLobby() { showLobbyModify(); }
 
 // Show the menu to change the settings of the lobby
 void ViewCLI::showLobbyModify() {
@@ -607,31 +851,112 @@ void ViewCLI::showErrorMessage(std::string message, int y, int x) {
     setErrorMessage("");
 }
 
-void ViewCLI::showMainMenu() {
-    WINDOW* newWin = getWinMenu();
-    basicMenuConfig();
-    int ymax, xmax;
-    getmaxyx(stdscr, ymax, xmax);
-    // Afficher le menu dans la boîte
-    mvwprintw(newWin, 0, 2, "MENU");
-    mvwprintw(newWin, 1, 2, "Player: %s", getPlayer()->getName().c_str());
-    mvwprintw(newWin, 5, 5, "PLAY");
-    mvwprintw(newWin, 8, 5, "INVITATION");
-    mvwprintw(newWin, 11, 5, "GAME INVITATION");
-    mvwprintw(newWin, 14, 5, "PROFILE");
-    mvwprintw(newWin, 17, 5, "RANKING");
+void ViewCLI::showMainMenu(int selected) {
+    WINDOW* win = getWinMenu();
 
-    int messageY = ymax - 5;  // Afficher les messages près du bas de l'écran
+    // ⚠️ IMPORTANT: ne pas refaire un clear complet à chaque appel
+    // Si basicMenuConfig() fait un werase/box/clear -> ça flicker.
+    // On le fait uniquement au premier draw.
+    const int h = getmaxy(win);
+    const int w = getmaxx(win);
 
-    // Afficher le message en dehors de la boîte sur stdscr
-    mvprintw(messageY, 0, "Press a to Play");
-    mvprintw(messageY + 1, 0, "Press b to open Option Menu");
-    mvprintw(messageY + 2, 0, "Press c to open Profile Menu");
-    mvprintw(messageY + 3, 0, "Press d to open Ranking Menu");
+    const char* items[] = {"PLAY", "INVITATION", "GAME INVITATION", "PROFILE", "RANKING"};
+    constexpr int itemCount = 5;
 
-    refreshScreen();
+    // Positions fixes (constantes)
+    const int topY = 6;
+    const int gap  = 2;
+
+    auto centerX = [&](const char* s) {
+        int x = (w - (int)std::strlen(s)) / 2;
+        return (x < 2) ? 2 : x;
+    };
+
+    auto drawItemLine = [&](int idx, bool isSelected) {
+        const char* label = items[idx];
+        std::string txt = std::string(isSelected ? "> " : "  ") + label + (isSelected ? " <" : "");
+
+        int y = topY + idx * gap;
+        int x = (w - (int)txt.size()) / 2;
+        if (x < 2) x = 2;
+
+        // Efface seulement cette ligne (pas tout l'écran)
+        mvwprintw(win, y, 2, "%*s", w - 4, "");
+
+        if (isSelected) {
+            wattron(win, COLOR_PAIR(10) | A_BOLD);
+            mvwprintw(win, y, x, "%s", txt.c_str());
+            wattroff(win, COLOR_PAIR(10) | A_BOLD);
+        } else {
+            wattron(win, A_BOLD);
+            mvwprintw(win, y, x, "%s", txt.c_str());
+            wattroff(win, A_BOLD);
+        }
+    };
+
+    // état statique pour éviter de tout redessiner
+    static bool drawn = false;
+    static int lastSelected = -1;
+    static int lastW = -1;
+    static int lastH = -1;
+
+    // Si la taille change, on redessine tout
+    bool resized = (w != lastW) || (h != lastH);
+
+    if (!drawn || resized) {
+        drawn = true;
+        lastW = w;
+        lastH = h;
+
+        basicMenuConfig();
+        werase(win);
+        box(win, 0, 0);
+
+        // Header
+        const char* title = "MENU PRINCIPAL";
+        wattron(win, A_BOLD);
+        mvwprintw(win, 1, centerX(title), "%s", title);
+        wattroff(win, A_BOLD);
+
+        // std::string playerLine = "Player: " + getPlayer()->getName();
+        // mvwprintw(win, 3, std::max(2, (w - (int)playerLine.size()) / 2), "%s", playerLine.c_str());
+
+        // Separator
+        for (int x = 2; x < w - 2; ++x) mvwaddch(win, 4, x, ACS_HLINE);
+
+        // Hints
+        wattron(win, A_DIM);
+        mvwprintw(win, h - 4, 2, "z/s : naviguer | Entrer : choisir");
+        wattroff(win, A_DIM);
+
+        // Items init (tous)
+        for (int i = 0; i < itemCount; ++i) {
+            drawItemLine(i, i == selected);
+        }
+
+        lastSelected = selected;
+
+        // Refresh propre
+        wnoutrefresh(win);
+        doupdate();
+        return;
+    }
+
+    // Update minimal: seulement 2 lignes
+    if (selected < 0) selected = 0;
+    if (selected >= itemCount) selected = itemCount - 1;
+
+    if (selected != lastSelected) {
+        if (lastSelected >= 0 && lastSelected < itemCount)
+            drawItemLine(lastSelected, false);
+
+        drawItemLine(selected, true);
+        lastSelected = selected;
+
+        wnoutrefresh(win);
+        doupdate();
+    }
 }
-
 // show the menu with the game invitations
 int ViewCLI::showGameInvitationMenu(std::vector<LobbyInvitation> invitations) {
     WINDOW* newWin = getWinMenu();

@@ -124,22 +124,42 @@ void ControllerCLI::handleKey(int ch, Game* game) {
     switch (ch) {
 
         case 'q':
+            if (game->isInvCMD()) {
+                game->sendMovementMessage(0, 1);
+                break;
+            }
             game->sendMovementMessage(0, -1);
             break;
 
         case 'd':
+            if (game->isInvCMD()) {
+                game->sendMovementMessage(0, -1);
+                break;
+            }
             game->sendMovementMessage(0, 1);
             break;
 
         case 's':
+            if (game->isInvCMD()) {
+                game->sendMovementMessage(-1, 0);
+                break;
+            }
             game->sendMovementMessage(1, 0);
             break;
 
         case 'z':
+            if (game->isInvCMD()) {
+                game->sendRotationMessage(false);
+                break;
+            }
             game->sendRotationMessage(true);
             break;
 
         case 'e':
+            if (game->isInvCMD()) {
+                game->sendRotationMessage(true);
+                break;
+            }
             game->sendRotationMessage(false);
             break;
         
@@ -210,16 +230,19 @@ std::pair<std::string, std::string> ControllerCLI::getUserLoginInfo() {
     bool valide = false;
     WINDOW* win = view_->getWinMenu();
 
+    auto ub = view_->getLoginUserBox();
+    auto pb = view_->getLoginPassBox();
+
     valide = false;
     while (!valide and signal.getSigIntFlag() == 0) {
         char nom[MAX_NAME_LENGTH];
-        int res = mvwgetnstr(win, 2, 21, nom, MAX_NAME_LENGTH);
+        int res = mvwgetnstr(win, ub.y, ub.x, nom, std::min(ub.maxLen, MAX_NAME_LENGTH - 1));
         info.first = nom;
         if (res == ERR) {
             continue;
         }
         char password[MAX_NAME_LENGTH];
-        mvwgetnstr(win, 3, 16, password, MAX_NAME_LENGTH);
+        mvwgetnstr(win, pb.y, pb.x, password, std::min(pb.maxLen, MAX_NAME_LENGTH - 1));
         info.second = password;
         valide = IController::validateInput(info.first) and
                  IController::validateInput(info.second);
@@ -230,31 +253,39 @@ std::pair<std::string, std::string> ControllerCLI::getUserLoginInfo() {
 // MENU ControllerCLI
 void ControllerCLI::captureInputMainMenu(Tetris& tetris) {
     Signal& signal = Signal::getInstance();
+
+    int selected = 0; // 0..4
+    view_->showMainMenu(selected);
+
     int key;
     bool done = false;
-    while (!done and signal.getSigIntFlag() == 0) {
+    while (!done && signal.getSigIntFlag() == 0) {
         key = getchar();
+
         switch (key) {
-            case 'a':
-                tetris.setMenuState(MENU_STATE::LOBBY);
+            // navigation
+            case 's':
+                selected = (selected + 1) % 5;
+                view_->showMainMenu(selected);
+                break;
+            case 'z':
+                selected = (selected + 4) % 5;
+                view_->showMainMenu(selected);
+                break;
+
+            // valider avec Enter (optionnel, mais pro)
+            case 10:
+            case 13:
+                switch (selected) {
+                    case 0: tetris.setMenuState(MENU_STATE::LOBBY); break;          // PLAY
+                    case 1: tetris.setMenuState(MENU_STATE::INVITATION); break;     // INVITATION
+                    case 2: tetris.setMenuState(MENU_STATE::GAME_INVITATION); break;// GAME INVITATION
+                    case 3: tetris.setMenuState(MENU_STATE::PROFILE); break;        // PROFILE
+                    case 4: tetris.setMenuState(MENU_STATE::RANKING); break;        // RANKING
+                }
                 done = true;
                 break;
-            case 'b':
-                tetris.setMenuState(MENU_STATE::INVITATION);
-                done = true;
-                break;
-            case 'e':
-                tetris.setMenuState(MENU_STATE::GAME_INVITATION);
-                done = true;
-                break;
-            case 'c':
-                tetris.setMenuState(MENU_STATE::PROFILE);
-                done = true;
-                break;
-            case 'd':
-                tetris.setMenuState(MENU_STATE::RANKING);
-                done = true;
-                break;
+
             default:
                 break;
         }
@@ -263,7 +294,7 @@ void ControllerCLI::captureInputMainMenu(Tetris& tetris) {
 
 void ControllerCLI::captureInputMenuLobby(Tetris& tetris) {
     std::shared_ptr<Lobby> lobby = getLobby();
-    view_->showMenuLobby();
+    view_->showLobbyModify();
     if (lobby->getIsSetup()) {
         lobby->setIsSetup(false);
         lobby->setupGame();

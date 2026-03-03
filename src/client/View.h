@@ -36,10 +36,9 @@ class IView {
     virtual int showMenuInviteFriendToParty(
         std::vector<PlayerHeader> friends) = 0;
     virtual void showMenu(MENU_STATE menu) = 0;
-    virtual void showMenuLobby() = 0;
     virtual void showLobbyModify() = 0;
     virtual void showLobbyWaitingRoom(bool) = 0;
-    virtual void showMainMenu() = 0;
+    virtual void showMainMenu(int selected) = 0;
     virtual int showGameInvitationMenu(std::vector<LobbyInvitation>) = 0;
     virtual void showRankingMenu() = 0;
     virtual void showPlayMenu() = 0;

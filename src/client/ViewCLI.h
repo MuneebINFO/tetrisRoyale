@@ -14,6 +14,12 @@
  *
  */
 
+ struct InputBox {
+    int y;
+    int x;
+    int maxLen;
+};
+
 class ControllerCLI;
 class Social;
 class ViewCLI final : public IView {
@@ -24,8 +30,8 @@ class ViewCLI final : public IView {
     FRIEND_REQUEST_STATUS friendRequestStatus_;
     std::string targetPlayerName_ = "";
     std::shared_ptr<Server> server_;
-
-    void showMainMenu() override;
+    InputBox loginUserBox_{};
+    InputBox loginPassBox_{};
 
     void showPlayMenu() override;
     void showRankingMenu() override;
@@ -40,6 +46,7 @@ class ViewCLI final : public IView {
     void clearScreen() override;
     void refreshScreen();
     void basicMenuConfig();
+    void showMainMenu(int selected) override;
 
     void showBoards(Game* game) override;
     void showEndScreen(bool won) override;
@@ -47,13 +54,14 @@ class ViewCLI final : public IView {
     int showMenuInviteFriendToParty(std::vector<PlayerHeader> friends) override;
     void showOptionInviteFriend(LobbyInviteFriend& lobbyFriend);
     void showMenu(MENU_STATE menu) override;
-    void showMenuLobby() override;
     void showLobbyModify() override;
     void showLobbyWaitingRoom(bool) override;
     int showMalusType() override;
     int showBonusType() override;
     int showMalusTarget(Game* game_) override;
     void showMalus(Game* game) override;
+    InputBox& getLoginUserBox() { return loginUserBox_; };
+    InputBox& getLoginPassBox() { return loginPassBox_; };
 
     void showErrorMessage(std::string message, int y = 5, int x = 20) override;
     void showMessage(std::string message, int y = 20, int x = 20) override;
