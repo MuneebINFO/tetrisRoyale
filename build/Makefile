@@ -1,78 +1,92 @@
-# Nom de l'exécutable
-EXEC = tetris
-SERVER_EXEC = tetris_server
+EXEC        := tetris
+SERVER_EXEC := tetris_server
 
-# Répertoire des fichiers source
-SRC_DIR = ../src
-TEST_DIR = ../test
-CLIENT_DIR = $(SRC_DIR)/client
-SERVER_DIR = $(SRC_DIR)/server
+ROOT    := ..
+SRC_DIR := $(ROOT)/src
 
-# Répertoire pour l'exécutable
-BUILD_DIR = .
-OBJ_DIR_CLIENT = $(BUILD_DIR)/objClient
-OBJ_DIR_SERVER = $(BUILD_DIR)/objServer
+CLIENT_DIR := $(SRC_DIR)/client
+SERVER_DIR := $(SRC_DIR)/server
+COMMON_DIR := $(SRC_DIR)/common
 
-# Fichier source
-SRC_FILES = $(wildcard $(CLIENT_DIR)/*.cpp)
-SRC_FILES_NO_MAIN := $(filter-out $(CLIENT_DIR)/main.cpp, $(wildcard $(CLIENT_DIR)/*.cpp))
-SERVER_SRC_FILES = $(wildcard $(SERVER_DIR)/*.cpp)
-TEST_FILES = $(wildcard $(TEST_DIR)/*.cpp)
+BUILD_DIR      := .
+OBJ_DIR_CLIENT := $(BUILD_DIR)/objClient
+OBJ_DIR_SERVER := $(BUILD_DIR)/objServer
 
-OBJFILES := $(patsubst $(CLIENT_DIR)/%.cpp, $(OBJ_DIR_CLIENT)/%.o, $(SRC_FILES))
-SERVER_OBJFILES := $(patsubst $(SERVER_DIR)/%.cpp, $(OBJ_DIR_SERVER)/%.o, $(SERVER_SRC_FILES))
-OBJTEST := $(patsubst $(CLIENT_DIR)/%.cpp, $(OBJ_DIR_CLIENT)/%.o, $(SRC_FILES_NO_MAIN))
-OBJTEST += $(patsubst $(TEST_DIR)/%.cpp, $(OBJ_DIR_CLIENT)/%.o, $(TEST_FILES))
+CXX := g++
 
-# Options du compilateur
-CXXFLAGS += -std=c++23
-CXXFLAGS += -pedantic -Wall -Wextra -g
-CXXFLAGS += -O2
-CXXFLAGS += -Wpedantic -Walloc-zero -Wcast-align -Wconversion -Wctad-maybe-unsupported -Wctor-dtor-privacy -Wdeprecated-copy-dtor -Wduplicated-branches -Wduplicated-cond -Wextra-semi -Wfloat-equal -Wformat-signedness -Wformat=2 -Winit-self -Wlogical-op -Wmismatched-tags -Wnoexcept -Wnon-virtual-dtor -Wnull-dereference -Wold-style-cast -Woverloaded-virtual -Wredundant-tags -Wshadow -Wsign-promo -Wstrict-null-sentinel -Wsuggest-attribute=const -Wsuggest-attribute=noreturn -Wsuggest-final-methods -Wsuggest-final-types -Wsuggest-override -Wswitch-default -Wswitch-enum -Wundef -Wuseless-cast -Wvolatile -Wzero-as-null-pointer-constant -fmax-errors=2 -MMD
-CXXFLAGS += -Wno-unused-command-line-argument -Wno-unknown-warning-option -lpqxx -lpq
+CXXFLAGS := -std=c++23 -O2 -g
+CXXFLAGS += -Wall -Wextra -Wpedantic -pedantic
+CXXFLAGS += -MMD -MP
+CXXFLAGS += -Wpedantic -Walloc-zero -Wcast-align -Wconversion -Wctad-maybe-unsupported \
+            -Wctor-dtor-privacy -Wdeprecated-copy-dtor -Wduplicated-branches -Wduplicated-cond \
+            -Wextra-semi -Wfloat-equal -Wformat-signedness -Wformat=2 -Winit-self -Wlogical-op \
+            -Wmismatched-tags -Wnoexcept -Wnon-virtual-dtor -Wnull-dereference -Wold-style-cast \
+            -Woverloaded-virtual -Wredundant-tags -Wshadow -Wsign-promo -Wstrict-null-sentinel \
+            -Wsuggest-attribute=const -Wsuggest-attribute=noreturn -Wsuggest-final-methods \
+            -Wsuggest-final-types -Wsuggest-override -Wswitch-default -Wswitch-enum -Wundef \
+            -Wuseless-cast -Wvolatile -Wzero-as-null-pointer-constant -fmax-errors=2
+CXXFLAGS += -Wno-unused-command-line-argument -Wno-unknown-warning-option
 
-SANITIZE = -fsanitize=address -fsanitize=leak -fsanitize=undefined
-TESTFLAGS = -I/usr/include/cppunit -L/usr/lib -lcppunit -ldl -pthread -lncurses
+SANITIZE := -fsanitize=address -fsanitize=leak -fsanitize=undefined
 
-all: $(BUILD_DIR)/$(EXEC) $(BUILD_DIR)/$(SERVER_EXEC)
-sanitize: $(BUILD_DIR)/$(EXEC)_sanitize
-test: $(BUILD_DIR)/$(EXEC)_test
+CPPINCLUDES := -I$(SRC_DIR)
+
+LDLIBS_CLIENT := -lmenu -lncurses -lpqxx -lpq -pthread
+LDLIBS_SERVER := -lpqxx -lpq -pthread
+
+CLIENT_SRCS := $(shell find $(CLIENT_DIR) $(COMMON_DIR) -type f -name "*.cpp")
+SERVER_SRCS := $(shell find $(SERVER_DIR) $(COMMON_DIR) -type f -name "*.cpp")
+
+# Map to objects (keep directory structure)
+CLIENT_OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR_CLIENT)/%.o,$(CLIENT_SRCS))
+SERVER_OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR_SERVER)/%.o,$(SERVER_SRCS))
+
+CLIENT_DEPS := $(CLIENT_OBJS:.o=.d)
+SERVER_DEPS := $(SERVER_OBJS:.o=.d)
+
+.PHONY: all client server sanitize clean reset
+
+all: client server
+
 client: $(BUILD_DIR)/$(EXEC)
 
-# Compilation
-$(BUILD_DIR)/$(EXEC): $(OBJFILES)
-	$(CXX) $(CXXFLAGS) -o $@ $^ -lmenu -lncurses
+server: $(BUILD_DIR)/$(SERVER_EXEC)
 
-$(BUILD_DIR)/$(SERVER_EXEC): $(SERVER_OBJFILES)
-	$(CXX) $(CXXFLAGS) $(SANITIZE) -o $@ $^ -lsqlite3 -pthread -lncurses  # Added -lsqlite3 and -pthread
+sanitize: $(BUILD_DIR)/$(EXEC)_sanitize $(BUILD_DIR)/$(SERVER_EXEC)_sanitize
 
-# Compilation avec les sanitizers
-$(BUILD_DIR)/$(EXEC)_sanitize: $(OBJFILES)
-	$(CXX) $(CXXFLAGS) $(SANITIZE) -o $@ $^ -lncurses
 
-# Compilation des tests
-$(BUILD_DIR)/$(EXEC)_test: $(OBJTEST)
-	$(CXX) $(CXXFLAGS) $(SANITIZE) -o $@ $^ $(TESTFLAGS)
+$(BUILD_DIR)/$(EXEC): $(CLIENT_OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDLIBS_CLIENT)
 
-# Compilation des fichiers sources en objets dans le dossier obj/
-$(OBJ_DIR_CLIENT)/%.o: $(CLIENT_DIR)/%.cpp
-	@mkdir -p $(OBJ_DIR_CLIENT)
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+$(BUILD_DIR)/$(SERVER_EXEC): $(SERVER_OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDLIBS_SERVER)
 
-$(OBJ_DIR_SERVER)/%.o: $(SERVER_DIR)/%.cpp
-	@mkdir -p $(OBJ_DIR_SERVER)
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+$(BUILD_DIR)/$(EXEC)_sanitize: CXXFLAGS += $(SANITIZE)
+$(BUILD_DIR)/$(EXEC)_sanitize: $(CLIENT_OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDLIBS_CLIENT)
 
-# Compilation des fichiers tests en objets dans le dossier obj/
-$(OBJ_DIR_CLIENT)/%.o: $(TEST_DIR)/%.cpp
-	@mkdir -p $(OBJ_DIR_CLIENT)
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+$(BUILD_DIR)/$(SERVER_EXEC)_sanitize: CXXFLAGS += $(SANITIZE)
+$(BUILD_DIR)/$(SERVER_EXEC)_sanitize: $(SERVER_OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDLIBS_SERVER)
 
-# Nettoyage des fichiers générés
+
+$(OBJ_DIR_CLIENT)/%.o: $(SRC_DIR)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(CPPINCLUDES) -c -o $@ $<
+
+
+$(OBJ_DIR_SERVER)/%.o: $(SRC_DIR)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(CPPINCLUDES) -c -o $@ $<
+
+
 clean:
-	rm -f $(BUILD_DIR)/$(EXEC) $(BUILD_DIR)/$(EXEC)_sanitize $(BUILD_DIR)/$(EXEC)_server $(OBJ_DIR_CLIENT)/* $(OBJ_DIR_SERVER)/*
+	rm -rf \
+		$(BUILD_DIR)/$(EXEC) $(BUILD_DIR)/$(SERVER_EXEC) \
+		$(BUILD_DIR)/$(EXEC)_sanitize $(BUILD_DIR)/$(SERVER_EXEC)_sanitize \
+		$(OBJ_DIR_CLIENT) $(OBJ_DIR_SERVER)
 
 reset: clean
 
-# Inclusion des fichiers de dépendances générés
--include $(OBJFILES:.o=.d) $(SERVER_OBJFILES:.o=.d) $(OBJTEST:.o=.d)
+
+-include $(CLIENT_DEPS) $(SERVER_DEPS)
