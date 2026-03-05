@@ -94,9 +94,7 @@ class Game {
     void startSpectator();
     void reset();
     void clearFullRows(GameUpdateHeader& update);
-    void tetraminoFall();
     void checkSignal();
-    void updatePlayerPosition(int x, int y);
 
     void setupBoards(std::vector<int> idPlayers, bool hasGrid = false);
     [[nodiscard]] bool getRunning();
@@ -149,8 +147,6 @@ class Game {
     void setIsSpectator(bool isSpectator) { isSpectator_ = isSpectator; }
 
     void sendSignalMutex();
-    void sendSpawnTetramino(const std::vector<std::vector<int>>& shape, int x,
-                            int y);
     void sendMovementMessage(int dx, int dy);
     void sendRotationMessage(bool clockwise);
     void sendMalusMessage(MalusPayload& payload);
@@ -177,8 +173,6 @@ class Game {
     void handleMalusAuthorisation();
     void handleBonusAuthorisation();
     void showGame();
-    void* receiveLoop();
-    static void* receiveLoopHelper(void* arg);
     std::vector<std::vector<int>> rotate(
         const std::vector<std::vector<int>>& shape, bool clockwise);
     void newBoard();

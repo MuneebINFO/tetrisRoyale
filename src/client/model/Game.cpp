@@ -123,15 +123,20 @@ int Game::start() {
         if (activity > 0 && FD_ISSET(sock, &readfds)) {
             processServerResponse();
 
-            // vider ce qui est déjà prêt (utile si burst)
             while (true) {
                 fd_set tmp;
                 FD_ZERO(&tmp);
                 FD_SET(sock, &tmp);
-                timeval tv2{0, 0};
+                timeval tv2;
+                tv2.tv_sec = 0;
+                tv2.tv_usec = 0;
+
                 int a2 = select(sock + 1, &tmp, nullptr, nullptr, &tv2);
-                if (a2 > 0 && FD_ISSET(sock, &tmp)) processServerResponse();
-                else break;
+                if (a2 > 0 && FD_ISSET(sock, &tmp)) {
+                    processServerResponse();
+                } else {
+                    break;
+                }
             }
         }
 
@@ -140,8 +145,15 @@ int Game::start() {
             std::chrono::duration_cast<std::chrono::microseconds>(now - lastFall)
                 .count();
 
-        int delayUs = SLEEP_TIME - points_ * 10;
-        if (delayUs < 50000) delayUs = 50000;
+        long delayUs = static_cast<long>(SLEEP_TIME) - static_cast<long>(points_) * 10L;
+
+        if (isSpeedUp()) {
+            delayUs = delayUs / 3;
+        } else if (isSpeedDown()) {
+            delayUs = delayUs * 3;
+        }
+
+        if (delayUs < 50000) delayUs = 50000; // 50ms minimum
 
         if (elapsedUs >= delayUs) {
             sendMovementMessage(1, 0);
@@ -149,10 +161,8 @@ int Game::start() {
         }
 
         showGame();
-
         usleep(2000);
     }
-
 
     return getIsLeaving();
 }

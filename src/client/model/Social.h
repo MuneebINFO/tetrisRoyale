@@ -42,6 +42,9 @@ class Social {
                              std::shared_ptr<Server> server_,
                              PlayerHeader& invitingPlayer);
     bool sendFriendRequestGUI(PlayerHeader& invitedPlayer, std::shared_ptr<Server> server_);
+    void joiningChatRoom(std::shared_ptr<Server> server_,
+                         std::shared_ptr<Player> player_, Tetris& tetris,
+                         PlayerHeader& player);
 
     void removeFriend(std::shared_ptr<Server> server_,
                       std::shared_ptr<Player> player_,

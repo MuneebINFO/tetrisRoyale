@@ -13,6 +13,8 @@ class IController;
 class Lobby;
 class SocialController;
 class SocialView;
+class ChatController;
+class ChatView;
 
 class Tetris {
    private:
@@ -24,6 +26,8 @@ class Tetris {
     std::shared_ptr<Lobby> lobby_;
     std::shared_ptr<SocialController> socialController_;
     std::shared_ptr<SocialView> socialView_;
+    std::shared_ptr<ChatController> chatController_;
+    std::shared_ptr<ChatView> chatView_;
     MENU_STATE menuState_;
 
    public:

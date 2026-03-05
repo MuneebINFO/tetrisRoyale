@@ -63,6 +63,7 @@ std::shared_ptr<Player> IController::getPlayer() {
 
 ControllerCLI::ControllerCLI(std::shared_ptr<IView> view) : IController(view) {
     view_ = std::static_pointer_cast<ViewCLI>(view);
+    chatModel_ = std::make_shared<ChatModel>();
     socialView_ = std::make_shared<SocialView>();
     data_ = std::make_unique<ThreadData>();  // remplace new ThreadData()
     int ret = tcgetattr(STDIN_FILENO, &old_.oldt);

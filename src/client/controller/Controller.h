@@ -73,8 +73,3 @@ struct ThreadData {
     IController* controller;
 };
 
-struct ChatThreadArgs {
-    IController* controller;
-    std::string username;
-    std::shared_ptr<Player> player;
-};

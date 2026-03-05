@@ -14,10 +14,10 @@ void SocialView::showFriendList(std::vector<PlayerHeader> friendsList, int& idx)
     if (int(friendsList.size()) > 0) {
         for (int i = 0; i < int(friendsList.size()); i++) {
             if (i == idx) {
-                wattron(newWin, COLOR_PAIR(1));
+                wattron(newWin, COLOR_PAIR(50));
                 mvwprintw(newWin, 3 + i, 2, "%s with ID %i",
                           friendsList[i].username, friendsList[i].idPlayer);
-                wattroff(newWin, COLOR_PAIR(1));
+                wattroff(newWin, COLOR_PAIR(50));
             } else {
                 mvwprintw(newWin, 3 + i, 2, "%s with ID %i",
                           friendsList[i].username, friendsList[i].idPlayer);
@@ -61,10 +61,10 @@ void SocialView::showInvitationList(std::vector<PlayerHeader> invitations, int& 
     if (invitations.size() > 0) {
         for (int i = 0; i < int(invitations.size()); i++) {
             if (i == idx) {
-                wattron(newWin, COLOR_PAIR(1));
+                wattron(newWin, COLOR_PAIR(50));
                 mvwprintw(newWin, 1 + i, 1, "Invitation from : %s with ID %i",
                           invitations[i].username, invitations[i].idPlayer);
-                wattroff(newWin, COLOR_PAIR(1));
+                wattroff(newWin, COLOR_PAIR(50));
             } else {
                 mvwprintw(newWin, 1 + i, 1, "Invitation from : %s with ID %i",
                     invitations[i].username, invitations[i].idPlayer);

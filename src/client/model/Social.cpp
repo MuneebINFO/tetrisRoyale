@@ -89,6 +89,14 @@ void Social::sendFriendRequestTerminalUI(std::shared_ptr<Server> server_,
     }
 }
 
+void Social::joiningChatRoom(std::shared_ptr<Server> server_,
+                             std::shared_ptr<Player> player_, Tetris& tetris,
+                             PlayerHeader& player) {
+    tetris.setMenuState(MENU_STATE::CHATROOM);
+    strcpy(player.receiver, player_->getFriendSelected().username);
+    server_->handleSocialRequest(SOCIAL_TYPE::INCHATROOM, player);
+}
+
 
 void Social::removeFriend(std::shared_ptr<Server> server_,
                           std::shared_ptr<Player> player_,

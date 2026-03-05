@@ -2,6 +2,7 @@
 #define NCURSES_NOMACROS 1
 #include <ncursesw/curses.h>
 
+#include "../model/ChatModel.h"
 #include "../model/Social.h"
 #include "../view/View.h"
 
@@ -21,6 +22,7 @@
 };
 
 class ControllerCLI;
+class ChatModel;
 class Social;
 class ViewCLI final : public IView {
    private:

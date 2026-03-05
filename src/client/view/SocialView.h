@@ -2,6 +2,7 @@
 #define __SOCIALVIEW_H
 
 #include "../../common/header.h"
+#include "../model/ChatModel.h"
 #include "../model/Lobby.h"
 #include "../model/Social.h"
 #include "../model/Tetris.h"
@@ -9,6 +10,8 @@
 
 class Tetris;
 class Lobby;
+class ChatModel;
+class ChatController;
 class Player;
 class ViewCLI;
 class Signal;

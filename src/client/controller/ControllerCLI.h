@@ -7,6 +7,7 @@
 #include <string>
 #include <queue>
 
+#include "../model/ChatModel.h"
 #include "../view/SocialView.h"
 #include "../view/ViewCLI.h"
 #include "Controller.h"
@@ -21,6 +22,7 @@ struct Terminal {
 };
 
 class SocialView;
+class ChatModel;
 
 class ControllerCLI final : public IController {
    private:
@@ -29,6 +31,7 @@ class ControllerCLI final : public IController {
     std::atomic<bool> threadActive;
     std::unique_ptr<ThreadData> data_;
     std::shared_ptr<ViewCLI> view_;
+    std::shared_ptr<ChatModel> chatModel_;
     std::shared_ptr<SocialView> socialView_;
 
     static void* gameInputSpectator(void* c);
