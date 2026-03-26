@@ -61,6 +61,7 @@ struct Player {
     std::shared_ptr<GameRoom> gameRoom;    // lien vers la salle de jeu
     std::shared_ptr<GameState> gameState;  // état du joueur
     int energy = 0;
+    bool alive = true;
 };
 
 struct UserAccount {

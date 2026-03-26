@@ -86,6 +86,7 @@ struct ChatHeader {
     char username[MAX_NAME_LENGTH];
     int idPlayer;
     char message[MAX_LENGTH_MESSAGES];  // pr inclure un message txt (chat)
+    bool inChatRoom;
 };
 
 struct LobbyHeader {

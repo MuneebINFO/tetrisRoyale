@@ -89,6 +89,7 @@ void Game::startSpectator() {
 
 int Game::start() {
     view_->clearScreen();
+    reset();
 
     srand(static_cast<unsigned>(time(nullptr) + getpid() +
                                 player_->getPlayerId()) *
@@ -167,7 +168,23 @@ int Game::start() {
     return getIsLeaving();
 }
 
-void Game::reset() {}
+void Game::reset() {
+    setRunning(true);
+    setPaused(false);
+    points_ = 0;
+    energy = 0;
+    blockedInput_ = false;
+    lockPending_ = false;
+    leaving_ = false;
+    invCMDCount_ = 0;
+    speedUp_ = false;
+    blackScreenSec = 0;
+    speedDownSec = 0;
+    controllerWait = false;
+    activeMalus.clear();
+    playerNames_.clear();
+    current_ = Tetramino();
+}
 
 bool Game::getRunning() {
     pthread_mutex_lock(&mutexStateM);
@@ -475,6 +492,42 @@ void Game::handleEnd(GameTypeHeader& gameHeader) {
     setRunning(false);
     bool won = (gameHeader.type == GAME_TYPE::WIN);
     view_->showEndScreen(won);
+    sendQuitParty();
+    drainPendingServerMessages();
+}
+
+void Game::drainPendingServerMessages(int timeoutMs) {
+    if (!server_) {
+        return;
+    }
+
+    const int sock = server_->getSocket();
+    if (sock < 0) {
+        return;
+    }
+
+    auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+
+    while (std::chrono::steady_clock::now() < deadline) {
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(sock, &readfds);
+
+        timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 20000;
+
+        int activity = select(sock + 1, &readfds, nullptr, nullptr, &tv);
+        if (activity <= 0 || !FD_ISSET(sock, &readfds)) {
+            break;
+        }
+
+        char buffer[BUFFER_SIZE];
+        if (server_->receiveMessage(buffer) <= 0) {
+            break;
+        }
+    }
 }
 
 void Game::handleMalusAuthorisation() {

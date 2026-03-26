@@ -47,11 +47,29 @@ void Lobby::setupGame() {
     Message message;
     message.serializeLobby(LOBBY_TYPE::CREATE, *this, buffer);
     server_->sendMessage(buffer, sizeof(Header) + sizeof(LobbyHeader));
-    std::string response = server_->receive();
-    LobbyResponseHeader responseHeader;
-    memcpy(&responseHeader, response.c_str(), sizeof(LobbyResponseHeader));
-    if (responseHeader.responseType == LOBBY_RESPONSE::CREATED) {
-        gameRoomId_ = responseHeader.idRoom;
+
+    while (true) {
+        if (server_->receiveMessage(buffer) <= 0) {
+            setIsSetup(false);
+            return;
+        }
+
+        HeaderResponse response;
+        memcpy(&response, buffer, sizeof(HeaderResponse));
+        if (response.type != MESSAGE_TYPE::LOBBY ||
+            response.sizeMessage < sizeof(LobbyResponseHeader)) {
+            continue;
+        }
+
+        LobbyResponseHeader responseHeader;
+        memcpy(&responseHeader,
+               buffer + sizeof(HeaderResponse),
+               sizeof(LobbyResponseHeader));
+
+        if (responseHeader.responseType == LOBBY_RESPONSE::CREATED) {
+            gameRoomId_ = responseHeader.idRoom;
+            break;
+        }
     }
     setIsGamer(true);
     setGroupeLeader(player_->getPlayerId());
@@ -117,7 +135,6 @@ void Lobby::reset() {
     if (!getIsSetup()) {
         return;
     }
-    leaveLobby();
     groupeLeader_ = -1;
     numberOfPlayer_ = 0;
     gameMode_.clear();

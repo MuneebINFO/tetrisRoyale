@@ -81,9 +81,9 @@ sudo -u postgres psql
 #### Étape 3.2
 Dans le shell PostgreSQL qui s’ouvre, exécuter les commandes suivantes pour créer un nouvel utilisateur et une base associée:
 ```
-CREATE USER simon WITH PASSWORD 'tetris';
+CREATE USER tetris WITH PASSWORD 'tetris';
 CREATE DATABASE game_server OWNER tetris;
-GRANT ALL PRIVILEGES ON DATABASE game_server TO simon;
+GRANT ALL PRIVILEGES ON DATABASE game_server TO tetris;
 
 -- Pour quitter
 \q

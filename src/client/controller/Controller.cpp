@@ -351,6 +351,7 @@ void ControllerCLI::waitingRoomAsLeader(bool& running) {
             lobby->sendStartNotification();
             break;
         case ESCAPE:
+            lobby->leaveLobby();
             running = false;
             break;
         default:

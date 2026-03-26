@@ -257,35 +257,71 @@ void updateScore(uint32_t score, int PlayerID) {
 }
 
 void GameMessage::handleTetraminoMsg(int clientSocket) {
+
     Server& server = Server::getInstance();
     auto player = server.getPlayer(clientSocket);
-    updateScore(player->gameState->points_, player->ID);
     auto players = server.getClients();
     auto gameRoom = player->gameRoom;
+
     GameServer game(player, player->gameState);
-    if (!player or !player->isPlaying or !gameRoom) return;
+
+    if (!player || !player->isPlaying || !gameRoom) return;
 
     SpawnTetraminoPayload payload;
 
     if (!game.handleTetramino(payload)) {
-        if (gameRoom->countAlivePlayers() == 2) {
-            sendWinMsg(server, gameRoom, players, game);
-        }
+
+        // joueur perd
         sendLoseMsg(player, server, gameRoom, clientSocket);
-        
-        if (gameRoom->countAlivePlayers() == 0) {  // For spectators
+
+        // compter les joueurs encore vivants
+        int alive = 0;
+        int lastAliveSocket = -1;
+
+        for (auto& [sock, p] : gameRoom->getPlayers()) {
+            if (p->isPlaying) {
+                alive++;
+                lastAliveSocket = sock;
+            }
+        }
+
+        // s'il reste un joueur → il gagne
+        if (alive == 1) {
+
+            HeaderResponse header;
+            header.type = MESSAGE_TYPE::GAME;
+            header.sizeMessage = sizeof(GameTypeHeader);
+
+            GameTypeHeader gameHeader;
+            gameHeader.type = GAME_TYPE::WIN;
+
+            char buffer[sizeof(HeaderResponse) + sizeof(GameTypeHeader)];
+
+            memcpy(buffer, &header, sizeof(HeaderResponse));
+            memcpy(buffer + sizeof(HeaderResponse),
+                   &gameHeader,
+                   sizeof(GameTypeHeader));
+
+            server.sendMessage(lastAliveSocket, buffer, sizeof(buffer));
+        }
+
+        // si plus personne → fin de partie
+        if (alive <= 1) {
             sendEndGameMsg(gameRoom);
         }
 
     } else {
+
         sendTetraminoMsg(payload, server, clientSocket);
+
     }
 }
 
-void GameMessage::sendWinMsg(Server& server, 
-                            std::shared_ptr<GameRoom> gameRoom, 
-                            std::map<int, std::shared_ptr<Player>> players, 
-                            GameServer game) {
+void GameMessage::sendWinMsg(Server& server,
+                             std::shared_ptr<GameRoom> gameRoom,
+                             std::map<int, std::shared_ptr<Player>> players,
+                             GameServer game)
+{
     HeaderResponse header;
     header.type = MESSAGE_TYPE::GAME;
     header.sizeMessage = sizeof(GameTypeHeader);
@@ -293,22 +329,23 @@ void GameMessage::sendWinMsg(Server& server,
     GameTypeHeader gameHeader;
     gameHeader.type = GAME_TYPE::WIN;
 
-    char WiningMsg[sizeof(HeaderResponse) + sizeof(GameTypeHeader)];
-    memcpy(WiningMsg, &header, sizeof(HeaderResponse));
-    memcpy(WiningMsg + sizeof(HeaderResponse), &gameHeader,
-            sizeof(GameTypeHeader));
+    char buffer[sizeof(HeaderResponse) + sizeof(GameTypeHeader)];
+
+    memcpy(buffer, &header, sizeof(HeaderResponse));
+    memcpy(buffer + sizeof(HeaderResponse),
+           &gameHeader,
+           sizeof(GameTypeHeader));
 
     int opponentSocket = game.getOpponentSocket();
-    server.sendMessage(opponentSocket, WiningMsg, sizeof(WiningMsg));
-    gameRoom->playerLeaves(players[opponentSocket]);
-    players[opponentSocket]->gameState = nullptr;
-    players[opponentSocket]->isPlaying = false;
+
+    server.sendMessage(opponentSocket, buffer, sizeof(buffer));
 }
 
-void GameMessage::sendLoseMsg(std::shared_ptr<Player>& player, 
-                            Server& server, 
-                            std::shared_ptr<GameRoom> gameRoom,
-                            int clientSocket) {
+void GameMessage::sendLoseMsg(std::shared_ptr<Player>& player,
+                              Server& server,
+                              std::shared_ptr<GameRoom> gameRoom,
+                              int clientSocket)
+{
     HeaderResponse header;
     header.type = MESSAGE_TYPE::GAME;
     header.sizeMessage = sizeof(GameTypeHeader);
@@ -317,13 +354,16 @@ void GameMessage::sendLoseMsg(std::shared_ptr<Player>& player,
     gameHeader.type = GAME_TYPE::LOST;
 
     char LosingMsg[sizeof(HeaderResponse) + sizeof(GameTypeHeader)];
+
     memcpy(LosingMsg, &header, sizeof(HeaderResponse));
-    memcpy(LosingMsg + sizeof(HeaderResponse), &gameHeader,
-            sizeof(GameTypeHeader));
+    memcpy(LosingMsg + sizeof(HeaderResponse),
+           &gameHeader,
+           sizeof(GameTypeHeader));
 
     server.sendMessage(clientSocket, LosingMsg, sizeof(LosingMsg));
-    gameRoom->playerLeaves(player);
-    player->gameState = nullptr;
+
+    // IMPORTANT : ne pas supprimer le joueur
+    player->alive = false;
     player->isPlaying = false;
 }
 
@@ -524,7 +564,12 @@ void GameMessage::handleStartMsg(int clientSocket) {
     auto lobby = server.getLobbyForClient(clientSocket);
     auto player = server.getPlayer(clientSocket);
     if (!lobby || !player) return;
+
+    player->gameState = std::make_shared<GameState>();
+    player->gameState->init();
     player->isPlaying = true;
+    player->alive = true;
+    player->energy = 0;
 
     /* if (lobby) {
         GameUpdateHeader update;
@@ -536,28 +581,21 @@ void GameMessage::handleStartMsg(int clientSocket) {
 void GameMessage::handleEndMsg(int clientSocket) {
     Server& server = Server::getInstance();
     auto player = server.getPlayer(clientSocket);
-    if (player) {
-        std::shared_ptr<GameRoom> gameRoom = player->gameRoom;
-        HeaderResponse header = {MESSAGE_TYPE::GAME, sizeof(GameEndHeader)};
-        GameEndHeader end;
-        end.type = GAME_TYPE::END;
-        end.score = uint32_t(player->gameState->points_);
-        updateScore(end.score, player->ID);
-        end.isWinner = server.checkWinner(player->gameState->points_);
-        char buffer[sizeof(HeaderResponse) + sizeof(GameEndHeader)];
-        memcpy(buffer, &header, sizeof(HeaderResponse));
-        memcpy(buffer + sizeof(HeaderResponse), &end, sizeof(GameEndHeader));
-        server.sendMessage(clientSocket, buffer,
-                           sizeof(HeaderResponse) + sizeof(GameEndHeader));
-        if (gameRoom->countAlivePlayers() == 1) {
-            gameRoom->setPlaying(false);
-        }
-        gameRoom->playerLeaves(player);
-        player->gameState = nullptr;
-        player->isPlaying = false;
-        if (gameRoom->countAlivePlayers() == 0) {  // For spectators
-            sendEndGameMsg(gameRoom);
-        }
+    if (!player || !player->gameRoom || !player->gameState) {
+        return;
+    }
+
+    std::shared_ptr<GameRoom> gameRoom = player->gameRoom;
+    updateScore(uint32_t(player->gameState->points_), player->ID);
+    server.checkWinner(player->gameState->points_);
+    if (gameRoom->countAlivePlayers() == 1) {
+        gameRoom->setPlaying(false);
+    }
+    gameRoom->playerLeaves(player);
+    player->gameState = nullptr;
+    player->isPlaying = false;
+    if (gameRoom->countAlivePlayers() == 0) {  // For spectators
+        sendEndGameMsg(gameRoom);
     }
 }
 
@@ -628,8 +666,15 @@ void LobbyMessage::handleCreate(const std::string& message, int clientSocket) {
     // Le créateur de la room rejoint directement la room
     gameRoom->addPlayer(clients[clientSocket], true);
 
-    LobbyResponseHeader response = {LOBBY_RESPONSE::CREATED, roomId};
-    server.sendMessage(clientSocket, &response, sizeof(response));
+    HeaderResponse response = {MESSAGE_TYPE::LOBBY,
+                               sizeof(LobbyResponseHeader)};
+    LobbyResponseHeader lobbyResponse = {LOBBY_RESPONSE::CREATED, roomId};
+    char buffer[sizeof(HeaderResponse) + sizeof(LobbyResponseHeader)];
+    memcpy(buffer, &response, sizeof(HeaderResponse));
+    memcpy(buffer + sizeof(HeaderResponse),
+           &lobbyResponse,
+           sizeof(LobbyResponseHeader));
+    server.sendMessage(clientSocket, buffer, sizeof(buffer));
 
     std::cout << "Game room created with ID " << roomId << std::endl;
 

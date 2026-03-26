@@ -163,6 +163,7 @@ class Game {
     void addLuckyPoints(BonusPayload& payload);
 
     void processServerResponse();
+    void drainPendingServerMessages(int timeoutMs = 200);
     void handleTetramino(char* recvBuffer);
     void handleMove(char* recvBuffer);
     void handleRotate(char* recvBuffer);

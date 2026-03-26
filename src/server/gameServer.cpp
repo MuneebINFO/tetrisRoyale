@@ -36,6 +36,27 @@ void* GameRoom::loop(void* c) {
             }
         }
     }
+
+    std::vector<std::shared_ptr<Player>> remainingPlayers;
+    remainingPlayers.reserve(room->players_.size());
+    for (const auto& [sock, player] : room->players_) {
+        (void)sock;
+        if (player) {
+            remainingPlayers.push_back(player);
+        }
+    }
+
+    for (const auto& player : remainingPlayers) {
+        player->gameRoom = nullptr;
+        player->gameState = nullptr;
+        player->isPlaying = false;
+        player->alive = true;
+        player->energy = 0;
+        server.addActivePlayer(player);
+    }
+
+    room->players_.clear();
+    room->gamers_.clear();
     room->deleteAllInvitations(room->roomId_);
     std::cout << "Game room " << room->roomId_ << " is closed" << std::endl;
     server.removeGameRoom(room->roomId_);
@@ -202,6 +223,9 @@ void GameRoom::playerLeaves(std::shared_ptr<Player> player) {
 
     bool asGamer = isPlayerGamer(player->ID);
     removePlayer(player);
+    player->gameRoom = nullptr;
+    player->isPlaying = false;
+    player->energy = 0;
 
     // vérifie si la socket est toujours connectée
     if (recv(player->socket, nullptr, 1, MSG_PEEK | MSG_DONTWAIT) == 0) {
@@ -216,9 +240,21 @@ void GameRoom::playerLeaves(std::shared_ptr<Player> player) {
     if ((player->ID == groupeLeader_ or gamers_.empty()) and !isPlaying()) {
         sendEndLobby();
 
-        for (auto it : players_) {
-            removePlayer(it.second);
-            server.addActivePlayer(it.second);
+        std::vector<std::shared_ptr<Player>> playersToRestore;
+        playersToRestore.reserve(players_.size());
+        for (const auto& [socket, remainingPlayer] : players_) {
+            (void)socket;
+            if (remainingPlayer) {
+                playersToRestore.push_back(remainingPlayer);
+            }
+        }
+
+        for (const auto& remainingPlayer : playersToRestore) {
+            removePlayer(remainingPlayer);
+            remainingPlayer->gameRoom = nullptr;
+            remainingPlayer->isPlaying = false;
+            remainingPlayer->energy = 0;
+            server.addActivePlayer(remainingPlayer);
         }
         setRunning(false);
     }
